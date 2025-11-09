@@ -1,0 +1,76 @@
+# Docker Compose Override Example
+# Copy this file to docker-compose.override.yml to customize your local development setup
+# This file will be automatically included by docker-compose
+
+services:
+  # Customize backend for local development
+  backend:
+    # ports:
+    #   - "8001:8000"  # Change port if 8000 is already in use
+    environment:
+      # Override environment variables for local development
+      # DEBUG: "true"
+      # LOG_LEVEL: "DEBUG"
+      # JWT_EXPIRES: 86400  # 24 hours for development
+    volumes:
+      # Add additional volume mounts if needed
+      # - ./local-config:/app/config:ro
+    # command: >
+    #   sh -c "
+    #     poetry run alembic upgrade head &&
+    #     poetry run python scripts/seed.py &&
+    #     poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    #   "
+
+  # Customize frontend for local development  
+  frontend:
+    # ports:
+    #   - "3001:3000"  # Change port if 3000 is already in use
+    environment:
+      # Override API base URL if backend port changed
+      # VITE_API_BASE: http://localhost:8001/api/v1
+    # volumes:
+    #   - ./frontend-local:/app/local:ro
+
+  # Customize database for local development
+  database:
+    # ports:
+    #   - "5433:5432"  # Change port if 5432 is already in use
+    environment:
+      # POSTGRES_DB: schedule_saas_custom
+      # POSTGRES_USER: custom_user
+      # POSTGRES_PASSWORD: custom_password
+    # volumes:
+    #   - ./local-db-init:/docker-entrypoint-initdb.d:ro
+
+  # Add additional services for development
+  # pgadmin:
+  #   image: dpage/pgadmin4:latest
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: admin@example.com
+  #     PGADMIN_DEFAULT_PASSWORD: admin
+  #   ports:
+  #     - "5050:80"
+  #   networks:
+  #     - schedule_network
+
+  # mailhog:
+  #   image: mailhog/mailhog:latest
+  #   ports:
+  #     - "1025:1025"  # SMTP
+  #     - "8025:8025"  # Web interface
+  #   networks:
+  #     - schedule_network
+
+# volumes:
+  # Add custom volumes if needed
+  # local_data:
+  #   driver: local
+
+# networks:
+  # Override network settings if needed
+  # schedule_network:
+  #   driver: bridge
+  #   ipam:
+  #     config:
+  #       - subnet: 172.30.0.0/16

@@ -1,0 +1,109 @@
+services:
+  # PostgreSQL Database
+  database:
+    image: postgres:16-alpine
+    container_name: schedule_saas_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: schedule_saas
+      POSTGRES_USER: schedule_user
+      POSTGRES_PASSWORD: schedule_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - schedule_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U schedule_user -d schedule_saas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: schedule_saas_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://schedule_user:schedule_password@database:5432/schedule_saas
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      JWT_EXPIRES: 3600
+      ORG_DEFAULT_LOCALE: ru
+      TZ: Europe/Moscow
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: http://localhost:3000,http://localhost:80
+      API_V1_PREFIX: /api/v1
+    ports:
+      - "8000:8000"
+    networks:
+      - schedule_network
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      - ./backend/alembic:/app/alembic:ro
+      - backend_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Vue 3 Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: schedule_saas_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE: http://localhost:8000/api/v1
+    ports:
+      - "80:80"
+    networks:
+      - schedule_network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis (for future caching/sessions)
+  redis:
+    image: redis:7-alpine
+    container_name: schedule_saas_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - schedule_network
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass redis_password
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  backend_logs:
+    driver: local
+
+networks:
+  schedule_network:
+    driver: bridge
