@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Group, Teacher, Course, CourseAssignment, Enrollment, 
-    Room, TimeTableSlot, Term, AcademicYear, HoursUnit
+    Room, TimeTableSlot, Term, AcademicYear
 )
 
 
@@ -99,7 +99,7 @@ async def test_basic_data(db_session: AsyncSession, test_organization):
         assignment_id=assignment.assignment_id,
         group_id=group.group_id,
         planned_hours=2,
-        unit=HoursUnit.per_week
+        unit="per_week"  # String value, not enum
     )
     db_session.add(enrollment)
     await db_session.flush()

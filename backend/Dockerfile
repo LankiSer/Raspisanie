@@ -42,10 +42,11 @@ RUN poetry config virtualenvs.create false && \
 # Copy project
 COPY . .
 
-# Make entrypoint script executable and create non-root user
-RUN chmod +x entrypoint.sh && \
-    addgroup --system --gid 1001 appgroup && \
-    adduser --system --uid 1001 --gid 1001 appuser && \
+# Make entrypoint script executable, fix line endings (CRLF to LF), and create non-root user
+RUN sed -i 's/\r$//' /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh && \
+    groupadd --system --gid 1001 appgroup && \
+    useradd --system --uid 1001 --gid 1001 --shell /bin/bash appuser && \
     chown -R appuser:appgroup /app
 
 USER appuser
@@ -58,7 +59,7 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Set entrypoint
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Run the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

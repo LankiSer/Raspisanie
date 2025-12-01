@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# Verify script is executable
+if [ ! -x "$0" ]; then
+    echo "❌ Error: entrypoint.sh is not executable"
+    exit 1
+fi
+
 echo "🚀 Starting application setup..."
 
 # Wait for database to be ready
@@ -36,12 +42,40 @@ print('true' if asyncio.run(check_db()) else 'false')
 
 if [ "$RESULT" = "true" ]; then
     echo "🌱 Database is empty, creating seed data..."
-    if [ -z "$SYNC_DATABASE_URL" ]; then
-        echo "❌ DATABASE_URL is not set. Cannot run seed SQL."
-        exit 1
+    
+    # Ensure we're in the correct directory
+    cd /app || exit 1
+    
+    # Temporarily disable exit on error for seed script
+    set +e
+    
+    # Try to run Python seed script
+    if [ -f "scripts/seed.py" ]; then
+        echo "📝 Running Python seed script (scripts/seed.py)..."
+        python3 scripts/seed.py
+        SEED_EXIT_CODE=$?
+        if [ $SEED_EXIT_CODE -eq 0 ]; then
+            echo "✅ Seed data created successfully!"
+        else
+            echo "⚠️  Seed script failed with exit code $SEED_EXIT_CODE, but continuing..."
+            echo "   You can manually run: docker compose exec backend python3 scripts/seed.py"
+        fi
+    elif [ -f "create_test_account.py" ]; then
+        echo "📝 Running test account creation script..."
+        python3 create_test_account.py
+        if [ $? -eq 0 ]; then
+            echo "✅ Test account created successfully!"
+        else
+            echo "⚠️  Test account creation failed, but continuing..."
+        fi
+    else
+        echo "⚠️  No seed script found. Database will be empty."
+        echo "   Available scripts: scripts/seed.py or create_test_account.py"
+        echo "   You can manually create test data after container starts."
     fi
-    psql "$SYNC_DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/admin_seed.sql
-    echo "✅ Seed data created successfully from SQL script!"
+    
+    # Re-enable exit on error
+    set -e
 else
     echo "📊 Database already contains data, skipping seed."
 fi

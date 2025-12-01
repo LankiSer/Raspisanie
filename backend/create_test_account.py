@@ -7,10 +7,9 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.models.organization import Organization
 from app.models.user import User, UserRole
-from app.models.educational import Group, Teacher, Course, CourseAssignment, Enrollment, HoursUnit
+from app.models.educational import Group, Teacher, Course, CourseAssignment, Enrollment
 from app.models.academic import AcademicYear, Term
 from app.models.facilities import Room, TimeTableSlot, TeacherAvailability, Holiday
-from app.models.lessons import Lesson
 from app.models.scheduling import LessonInstance, ChangeLog, GenerationJob
 
 async def create_test_account():
@@ -147,7 +146,7 @@ async def create_test_account():
                     assignment_id=assignment.assignment_id,
                     group_id=group.group_id,
                     planned_hours=120,
-                    unit=HoursUnit.PER_TERM.value
+                    unit="per_term"  # String value, not enum
                 )
                 session.add(enrollment)
         await session.flush()

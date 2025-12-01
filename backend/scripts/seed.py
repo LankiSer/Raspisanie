@@ -10,12 +10,13 @@ from datetime import date, time, datetime, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import Base
 from app.core.auth import get_password_hash
 from app.models import (
     Organization, User, UserRole, AcademicYear, Term,
-    Group, Teacher, Course, CourseAssignment, Enrollment, HoursUnit,
+    Group, Teacher, Course, CourseAssignment, Enrollment,
     Room, TimeTableSlot, TeacherAvailability, Holiday,
     LessonInstance, LessonStatus
 )
@@ -33,44 +34,83 @@ async def create_seed_data():
     
     async with async_session() as session:
         try:
-            # 1. Create demo organization
-            print("📚 Creating organization...")
-            org = Organization(
-                name="Московский технический университет",
-                locale="ru",
-                tz="Europe/Moscow"
+            # 1. Get or create demo organization
+            print("📚 Checking organization...")
+            org_result = await session.execute(
+                select(Organization).where(Organization.name == "Московский технический университет")
             )
-            session.add(org)
-            await session.flush()  # Get org_id
+            org = org_result.scalar_one_or_none()
             
-            # 2. Create demo users
+            if not org:
+                print("📚 Creating organization...")
+                org = Organization(
+                    name="Московский технический университет",
+                    locale="ru",
+                    tz="Europe/Moscow"
+                )
+                session.add(org)
+                await session.flush()
+            else:
+                print(f"✅ Organization already exists: {org.name}")
+            
+            # 2. Get or create demo users
             print("👥 Creating users...")
-            admin_user = User(
-                org_id=org.org_id,
-                email="admin@university.edu",
-                password_hash=get_password_hash("admin123"),
-                role=UserRole.ADMIN,
-                is_active=True
-            )
+            users_to_create = []
             
-            methodist_user = User(
-                org_id=org.org_id,
-                email="methodist@university.edu",
-                password_hash=get_password_hash("methodist123"),
-                role=UserRole.METHODIST,
-                is_active=True
+            # Check and create admin user
+            admin_result = await session.execute(
+                select(User).where(User.email == "admin@university.edu")
             )
+            admin_user = admin_result.scalar_one_or_none()
+            if not admin_user:
+                admin_user = User(
+                    org_id=org.org_id,
+                    email="admin@university.edu",
+                    password_hash=get_password_hash("admin123"),
+                    role=UserRole.ADMIN,
+                    is_active=True
+                )
+                users_to_create.append(admin_user)
+            else:
+                print(f"✅ User already exists: {admin_user.email}")
             
-            teacher1_user = User(
-                org_id=org.org_id,
-                email="teacher1@university.edu", 
-                password_hash=get_password_hash("teacher123"),
-                role=UserRole.TEACHER,
-                is_active=True
+            # Check and create methodist user
+            methodist_result = await session.execute(
+                select(User).where(User.email == "methodist@university.edu")
             )
+            methodist_user = methodist_result.scalar_one_or_none()
+            if not methodist_user:
+                methodist_user = User(
+                    org_id=org.org_id,
+                    email="methodist@university.edu",
+                    password_hash=get_password_hash("methodist123"),
+                    role=UserRole.METHODIST,
+                    is_active=True
+                )
+                users_to_create.append(methodist_user)
+            else:
+                print(f"✅ User already exists: {methodist_user.email}")
             
-            session.add_all([admin_user, methodist_user, teacher1_user])
-            await session.flush()
+            # Check and create teacher user
+            teacher_result = await session.execute(
+                select(User).where(User.email == "teacher1@university.edu")
+            )
+            teacher1_user = teacher_result.scalar_one_or_none()
+            if not teacher1_user:
+                teacher1_user = User(
+                    org_id=org.org_id,
+                    email="teacher1@university.edu", 
+                    password_hash=get_password_hash("teacher123"),
+                    role=UserRole.TEACHER,
+                    is_active=True
+                )
+                users_to_create.append(teacher1_user)
+            else:
+                print(f"✅ User already exists: {teacher1_user.email}")
+            
+            if users_to_create:
+                session.add_all(users_to_create)
+                await session.flush()
             
             # 3. Create academic year and term
             print("📅 Creating academic year and term...")
@@ -272,16 +312,21 @@ async def create_seed_data():
             # 10. Create enrollments (group takes course assignment)
             print("📝 Creating enrollments...")
             enrollments = []
+            # Create a mapping of course_id to course for quick lookup
+            course_map = {course.course_id: course for course in courses}
+            
             for group in groups:
                 for assignment in assignments:
-                    hours = 3 if assignment.course.type == "lecture" else 2
+                    # Get course type from the course map
+                    course = course_map[assignment.course_id]
+                    hours = 3 if course.type == "lecture" else 2
                     enrollments.append(
                         Enrollment(
                             org_id=org.org_id,
                             assignment_id=assignment.assignment_id,
                             group_id=group.group_id,
                             planned_hours=hours,
-                            unit=HoursUnit.per_week
+                            unit="per_week"  # String value, not enum
                         )
                     )
             session.add_all(enrollments)
@@ -335,7 +380,7 @@ async def create_seed_data():
                     slot_id=time_slots[1].slot_id,
                     room_id=rooms[1].room_id,
                     enrollment_id=enrollments[1].enrollment_id,
-                    status=LessonStatus.SCHEDULED,
+                    status=LessonStatus.CONFIRMED,
                     created_by=admin_user.user_id,
                     version=1
                 ),

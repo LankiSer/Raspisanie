@@ -47,6 +47,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/alembic:/app/alembic:ro
+      - ./backend/scripts:/app/scripts:ro
       - backend_logs:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
