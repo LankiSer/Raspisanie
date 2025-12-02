@@ -20,7 +20,7 @@ class RoomResponse(BaseModel):
     org_id: int
     number: str
     capacity: int
-    kind: str
+    kind: Optional[str] = None  # Can be None in database
     building: Optional[str] = None
     is_active: bool = True
 
@@ -180,7 +180,7 @@ class TimeSlotResponse(BaseModel):
     start_time: time
     end_time: time
     break_minutes: int
-    label: str
+    label: Optional[str] = None  # Can be None in database
     weekday_mask: int
 
 class TimeSlotCreate(BaseModel):

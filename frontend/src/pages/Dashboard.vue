@@ -234,7 +234,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import { useAuthStore } from '@/stores/auth'
 import { lessonsAPI, catalogAPI, reportsAPI } from '@/services/api'
-import { format } from 'date-fns'
+import { format, startOfWeek, endOfWeek, parseISO } from 'date-fns'
 
 export default {
   name: 'Dashboard',
@@ -299,6 +299,24 @@ export default {
         } catch (error) {
           console.warn('Could not load teachers count:', error)
           stats.value.totalTeachers = 0
+        }
+
+        // Load lessons for this week
+        try {
+          const now = new Date()
+          const weekStart = startOfWeek(now, { weekStartsOn: 1 })
+          const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
+          
+          const lessonsResponse = await lessonsAPI.getByTerm({
+            start_date: format(weekStart, 'yyyy-MM-dd'),
+            end_date: format(weekEnd, 'yyyy-MM-dd')
+          })
+          
+          const weekLessons = lessonsResponse.data || lessonsResponse || []
+          stats.value.lessonsThisWeek = Array.isArray(weekLessons) ? weekLessons.length : 0
+        } catch (error) {
+          console.warn('Could not load lessons for week:', error)
+          stats.value.lessonsThisWeek = 0
         }
 
         // Load conflicts (simplified)

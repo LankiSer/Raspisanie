@@ -1,6 +1,7 @@
 """Schedule generation service using OR-Tools CP-SAT."""
 
 import logging
+import random
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
@@ -99,7 +100,11 @@ class ScheduleGenerator:
             .join(Teacher)
             .where(Enrollment.org_id == self.org_id)
         )
-        enrollments = enrollments_result.scalars().all()
+        enrollments = list(enrollments_result.scalars().all())
+        
+        # Shuffle enrollments to randomize course assignment across groups
+        # This ensures different groups get different courses at different times
+        random.shuffle(enrollments)
         
         # Get time slots
         slots_result = await self.db.execute(
@@ -340,12 +345,38 @@ class ScheduleGenerator:
         
         objective_terms = []
         
+        # Group enrollments by course to add diversity penalty
+        # This ensures different groups get different courses at different times
+        course_enrollments = {}
+        for enrollment in data.enrollments:
+            course_id = enrollment.assignment.course_id
+            if course_id not in course_enrollments:
+                course_enrollments[course_id] = []
+            course_enrollments[course_id].append(enrollment)
+        
+        # Add randomization: penalize scheduling same course for multiple groups at same time
+        for course_id, enrollments in course_enrollments.items():
+            if len(enrollments) > 1:
+                # For each time slot, penalize if multiple groups have same course
+                for d in range(len(data.dates)):
+                    for s in range(len(data.time_slots)):
+                        course_vars = []
+                        for enrollment in enrollments:
+                            for r in range(len(data.rooms)):
+                                var_name = f"lesson_{enrollment.enrollment_id}_{d}_{s}_{r}"
+                                if var_name in variables:
+                                    course_vars.append(variables[var_name])
+                        
+                        if len(course_vars) > 1:
+                            # Penalize if more than one group has this course at same time
+                            # This encourages diversity
+                            total_course_lessons = sum(course_vars)
+                            # Small penalty for having same course at same time for multiple groups
+                            objective_terms.append((len(course_vars) - total_course_lessons) * 10)
+        
         # Maximize scheduled lessons (primary objective)
         for var in variables.values():
             objective_terms.append(var * 100)  # High weight for scheduling lessons
-        
-        # Add other soft constraint penalties here
-        # (simplified for brevity - can be extended with gap minimization, etc.)
         
         if objective_terms:
             self.model.Maximize(sum(objective_terms))

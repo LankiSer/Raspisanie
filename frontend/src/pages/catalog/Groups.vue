@@ -527,13 +527,18 @@ export default {
 
       try {
         await catalogAPI.deleteGroup(group.group_id)
+        // Remove from list immediately
         const index = groups.value.findIndex(g => g.group_id === group.group_id)
         if (index !== -1) {
           groups.value.splice(index, 1)
         }
+        // Reload groups to ensure consistency
+        await loadGroups()
       } catch (error) {
         console.error('Error deleting group:', error)
         alert('Ошибка при удалении группы')
+        // Reload on error to ensure consistency
+        await loadGroups()
       }
     }
 

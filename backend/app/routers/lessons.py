@@ -11,6 +11,7 @@ from app.models.facilities import TimeTableSlot, Room
 from app.models.educational import Enrollment, Group, Teacher, Course, CourseAssignment
 from app.schemas.lessons import LessonCreate, LessonUpdate, LessonResponse
 from app.models.user import User
+from app.repositories.lesson import LessonRepository
 
 router = APIRouter()
 
@@ -80,7 +81,7 @@ async def get_lessons_by_term(
             "room_number": lesson.room_number,
             "start_time": str(lesson.start_time),
             "end_time": str(lesson.end_time),
-            "status": lesson.status.upper()
+            "status": lesson.status.value.lower() if hasattr(lesson.status, 'value') else str(lesson.status).lower()
         }
         for lesson in lessons
     ]
@@ -139,7 +140,7 @@ async def get_lessons_by_day(
             "room_number": lesson.room_number,
             "start_time": str(lesson.start_time),
             "end_time": str(lesson.end_time),
-            "status": lesson.status.upper()
+            "status": lesson.status.value.lower() if hasattr(lesson.status, 'value') else str(lesson.status).lower()
         }
         for lesson in lessons
     ]
@@ -212,7 +213,7 @@ async def get_lessons(
             "room_number": lesson.room_number,
             "start_time": str(lesson.start_time),
             "end_time": str(lesson.end_time),
-            "status": lesson.status.upper()
+            "status": lesson.status.value.lower() if hasattr(lesson.status, 'value') else str(lesson.status).lower()
         }
         for lesson in lessons
     ]
@@ -224,14 +225,43 @@ async def create_lesson(
     current_user: User = Depends(get_current_active_user_or_demo)
 ):
     """Create a new lesson."""
+    # Check for conflicts before creating
+    lesson_repo = LessonRepository(db)
+    conflicts = await lesson_repo.check_conflicts(
+        org_id=lesson.org_id,
+        date=lesson.date,
+        slot_id=lesson.slot_id,
+        enrollment_id=lesson.enrollment_id,
+        room_id=lesson.room_id,
+        exclude_lesson_id=None
+    )
+    
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Conflicts detected",
+                "conflicts": conflicts
+            }
+        )
+    
     # Create new lesson
+    # Convert status string to LessonStatus enum
+    status_value = lesson.status.upper() if lesson.status else "PLANNED"
+    try:
+        lesson_status = LessonStatus(status_value)
+    except ValueError:
+        lesson_status = LessonStatus.PLANNED
+    
     new_lesson = LessonInstance(
         org_id=lesson.org_id,
+        term_id=1,  # TODO: get current term
         date=lesson.date,
         slot_id=lesson.slot_id,
         room_id=lesson.room_id,
         enrollment_id=lesson.enrollment_id,
-        status=lesson.status.upper().upper() or "PLANNED"
+        status=lesson_status,
+        created_by=current_user.user_id
     )
     
     db.add(new_lesson)
@@ -273,7 +303,7 @@ async def create_lesson(
         "room_number": lesson_data.room_number,
         "start_time": str(lesson_data.start_time),
         "end_time": str(lesson_data.end_time),
-        "status": new_lesson.status.upper()
+        "status": new_lesson.status.value.lower() if hasattr(new_lesson.status, 'value') else str(new_lesson.status).lower()
     }
 
 @router.post("/bulk", response_model=dict)
@@ -286,13 +316,22 @@ async def create_lessons_bulk(
     created_lessons = []
     
     for lesson_data in lessons:
+        # Convert status string to LessonStatus enum
+        status_value = lesson_data.status.upper() if lesson_data.status else "PLANNED"
+        try:
+            lesson_status = LessonStatus(status_value)
+        except ValueError:
+            lesson_status = LessonStatus.PLANNED
+        
         new_lesson = LessonInstance(
             org_id=lesson_data.org_id,
+            term_id=1,  # TODO: get current term
             date=lesson_data.date,
             slot_id=lesson_data.slot_id,
             room_id=lesson_data.room_id,
             enrollment_id=lesson_data.enrollment_id,
-            status=lesson_data.status or "PLANNED"
+            status=lesson_status,
+            created_by=current_user.user_id
         )
         db.add(new_lesson)
         created_lessons.append(new_lesson)
@@ -358,7 +397,7 @@ async def get_lesson(
         "room_number": lesson.room_number,
         "start_time": str(lesson.start_time),
         "end_time": str(lesson.end_time),
-        "status": lesson.status.upper()
+        "status": lesson.status.value.lower() if hasattr(lesson.status, 'value') else str(lesson.status).lower()
     }
 
 @router.patch("/{lesson_id}", response_model=LessonResponse)
@@ -392,7 +431,17 @@ async def update_lesson(
             if field == 'date' and isinstance(value, str):
                 from datetime import datetime
                 value = datetime.strptime(value, '%Y-%m-%d').date()
+            # Convert status string to LessonStatus enum
+            elif field == 'status' and isinstance(value, str):
+                status_value = value.upper()
+                try:
+                    value = LessonStatus(status_value)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid status: {value}")
             setattr(existing_lesson, field, value)
+    
+    # Update updated_by and updated_at
+    existing_lesson.updated_by = current_user.user_id
     
     await db.commit()
     await db.refresh(existing_lesson)
@@ -439,7 +488,7 @@ async def update_lesson(
         "room_number": lesson_data.room_number,
         "start_time": str(lesson_data.start_time),
         "end_time": str(lesson_data.end_time),
-        "status": lesson_data.status
+        "status": lesson_data.status.value.lower() if hasattr(lesson_data.status, 'value') else str(lesson_data.status).lower()
     }
 
 @router.delete("/{lesson_id}")
@@ -460,8 +509,9 @@ async def delete_lesson(
     if not existing_lesson:
         raise HTTPException(status_code=404, detail="LessonInstance not found")
     
-    # Soft delete - set is_active to False
+    # Soft delete - set status to CANCELLED
     existing_lesson.status = LessonStatus.CANCELLED
+    existing_lesson.updated_by = current_user.user_id
     await db.commit()
     
     return {"message": "LessonInstance deleted successfully"}

@@ -43,11 +43,19 @@ async def get_groups(
     skip: int = 0,
     limit: int = 100,
     search: Optional[str] = None,
+    is_active: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user_or_demo)
 ):
     """Get groups with pagination and search."""
     query = select(Group).where(Group.org_id == current_user.org_id)
+    
+    # Filter by active status if provided, otherwise show only active by default
+    if is_active is not None:
+        query = query.where(Group.is_active == is_active)
+    else:
+        # Default: show only active groups
+        query = query.where(Group.is_active == True)
     
     if search:
         query = query.where(Group.name.ilike(f"%{search}%"))
@@ -64,7 +72,7 @@ async def get_groups(
             name=group.name,
             size=group.size,
             year_level=group.year_level,
-            generation_type=group.generation_type,
+            generation_type=group.generation_type or 2,  # Use default if None
             is_active=group.is_active
         )
         for group in groups
@@ -110,7 +118,7 @@ async def create_group(
         name=new_group.name,
         size=new_group.size,
         year_level=new_group.year_level,
-        generation_type=new_group.generation_type,
+        generation_type=new_group.generation_type or 2,  # Use default if None
         is_active=new_group.is_active
     )
 
@@ -148,6 +156,7 @@ async def update_group(
         name=existing_group.name,
         size=existing_group.size,
         year_level=existing_group.year_level,
+        generation_type=existing_group.generation_type or 2,  # Use default if None
         is_active=existing_group.is_active
     )
 
