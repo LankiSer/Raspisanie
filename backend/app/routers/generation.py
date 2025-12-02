@@ -1,5 +1,6 @@
 """Schedule generation router."""
 
+import logging
 from typing import List, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from app.models.educational import Enrollment, Group, Teacher, Course, CourseAss
 from app.models.facilities import Room, TimeTableSlot
 from app.models.user import User
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Simple request/response models for demo
@@ -526,6 +528,57 @@ async def run_generation(
     """Run schedule generation and save to database."""
     
     try:
+        # Verify term exists or find term by date range
+        from sqlalchemy import select
+        from app.models.academic import Term
+        
+        logger.info(f"DEBUG: Starting generation with request.term_id={request.term_id}, from_date={request.from_date}, to_date={request.to_date}")
+        
+        term_result = await db.execute(
+            select(Term).where(
+                Term.term_id == request.term_id,
+                Term.org_id == current_user.org_id
+            )
+        )
+        term = term_result.scalar_one_or_none()
+        
+        logger.info(f"DEBUG: Initial term lookup: term_id={request.term_id}, found={term is not None}")
+        
+        # If term not found, try to find term that covers the date range
+        if not term:
+            # Try to find term by date range
+            term_by_date_result = await db.execute(
+                select(Term).where(
+                    Term.org_id == current_user.org_id,
+                    Term.start_date <= request.from_date,
+                    Term.end_date >= request.to_date
+                ).order_by(Term.start_date.desc())
+            )
+            term = term_by_date_result.scalar_one_or_none()
+            logger.info(f"DEBUG: Term by date range lookup: found={term is not None}")
+            
+            if not term:
+                # Try to find any term that covers at least the start date
+                term_by_start_result = await db.execute(
+                    select(Term).where(
+                        Term.org_id == current_user.org_id,
+                        Term.start_date <= request.from_date,
+                        Term.end_date >= request.from_date
+                    ).order_by(Term.start_date.desc())
+                )
+                term = term_by_start_result.scalar_one_or_none()
+                logger.info(f"DEBUG: Term by start date lookup: found={term is not None}")
+        
+        if not term:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Term with ID {request.term_id} not found and no term found that covers the date range {request.from_date} to {request.to_date}. Please create a term first."
+            )
+        
+        # Use the found term_id (either the requested one or the auto-found one)
+        actual_term_id = term.term_id
+        logger.info(f"DEBUG: Using term_id={actual_term_id} for generation (requested was {request.term_id})")
+        
         # Generate preview first
         preview_result = await _preview_generation_internal(request, db, current_user)
         
@@ -536,7 +589,7 @@ async def run_generation(
             }
         
         # Clear existing lessons for the date range (if any exist)
-        from sqlalchemy import delete, select
+        from sqlalchemy import delete
         existing_lessons = await db.execute(
             select(LessonInstance).where(
                 LessonInstance.org_id == current_user.org_id,
@@ -556,9 +609,58 @@ async def run_generation(
         # Create lessons from proposals and save to database
         created_lessons = []
         for proposal in preview_result.proposals:
+            # For each proposal, find the term that covers its date
+            proposal_term_result = await db.execute(
+                select(Term).where(
+                    Term.org_id == current_user.org_id,
+                    Term.start_date <= proposal.date,
+                    Term.end_date >= proposal.date
+                ).order_by(Term.start_date.desc())
+            )
+            proposal_term = proposal_term_result.scalar_one_or_none()
+            
+            if not proposal_term:
+                # Rollback any pending changes
+                await db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No term found that covers date {proposal.date}. Please create a term that covers all dates in the generation range ({request.from_date} to {request.to_date})."
+                )
+            
+            # Ensure we're using the found term_id, not the requested one
+            lesson_term_id = proposal_term.term_id
+            
+            # Double-check that term_id is valid (not None and not 0)
+            if not lesson_term_id or lesson_term_id <= 0:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid term_id {lesson_term_id} found for date {proposal.date}."
+                )
+            
+            # CRITICAL: Verify term exists in database before using it
+            term_verify_result = await db.execute(
+                select(Term).where(
+                    Term.term_id == lesson_term_id,
+                    Term.org_id == current_user.org_id
+                )
+            )
+            term_verified = term_verify_result.scalar_one_or_none()
+            
+            if not term_verified:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Term with ID {lesson_term_id} does not exist in database for date {proposal.date}. Please create a term first."
+                )
+            
+            # Log for debugging
+            logger.info(f"Creating lesson for date {proposal.date} with term_id={term_verified.term_id} (requested was {request.term_id}, verified term exists)")
+            
+            # Create lesson with verified term_id
             lesson = LessonInstance(
                 org_id=current_user.org_id,
-                term_id=request.term_id,
+                term_id=term_verified.term_id,  # Use verified term_id - CRITICAL: not request.term_id!
                 date=proposal.date,
                 slot_id=proposal.slot_id,
                 room_id=proposal.room_id,
@@ -566,8 +668,89 @@ async def run_generation(
                 status=LessonStatus.CONFIRMED,
                 created_by=current_user.user_id
             )
+            
+            # CRITICAL: Explicitly set term_id again to ensure it's not overridden
+            lesson.term_id = term_verified.term_id
+            
+            # Verify the term_id is set correctly before adding to session
+            if lesson.term_id != term_verified.term_id:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to set term_id on lesson object. Expected {term_verified.term_id}, got {lesson.term_id}"
+                )
+            
             db.add(lesson)
             created_lessons.append(lesson)
+        
+        # Flush to ensure all objects are in session before commit
+        await db.flush()
+        
+        # CRITICAL: Verify all lessons have valid term_id before commit
+        logger.info(f"DEBUG: Verifying {len(created_lessons)} lessons before commit")
+        for idx, lesson in enumerate(created_lessons):
+            logger.info(f"DEBUG: Lesson {idx}: date={lesson.date}, term_id={lesson.term_id}")
+            
+            # Re-find term for this lesson's date to ensure we have the correct one
+            lesson_term_result = await db.execute(
+                select(Term).where(
+                    Term.org_id == current_user.org_id,
+                    Term.start_date <= lesson.date,
+                    Term.end_date >= lesson.date
+                ).order_by(Term.start_date.desc())
+            )
+            correct_term = lesson_term_result.scalar_one_or_none()
+            
+            if not correct_term:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No term found for date {lesson.date}. Please create a term that covers this date."
+                )
+            
+            # CRITICAL: Force update term_id if it's wrong
+            if lesson.term_id != correct_term.term_id:
+                logger.warning(f"DEBUG: Lesson {idx} has wrong term_id {lesson.term_id}, correcting to {correct_term.term_id}")
+                lesson.term_id = correct_term.term_id
+                # Mark as modified so SQLAlchemy picks up the change
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(lesson, 'term_id')
+            
+            if not lesson.term_id or lesson.term_id <= 0:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid term_id {lesson.term_id} found in lesson for date {lesson.date}."
+                )
+            
+            # Double-check term exists
+            term_check = await db.execute(
+                select(Term).where(
+                    Term.term_id == lesson.term_id,
+                    Term.org_id == current_user.org_id
+                )
+            )
+            term_exists = term_check.scalar_one_or_none()
+            if not term_exists:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Term {lesson.term_id} does not exist for lesson on date {lesson.date}."
+                )
+            logger.info(f"DEBUG: Lesson {idx} verified: term_id={lesson.term_id} exists")
+        
+        # Flush again after corrections
+        await db.flush()
+        
+        # Final verification before commit
+        logger.info(f"DEBUG: Final verification before commit - all lessons have correct term_id")
+        for idx, lesson in enumerate(created_lessons):
+            if lesson.term_id == 1:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"CRITICAL: Lesson {idx} still has term_id=1! This should not happen. Date: {lesson.date}"
+                )
         
         # Commit all lessons to database
         await db.commit()
@@ -588,9 +771,13 @@ async def run_generation(
             "blocks_preview": preview_result.blocks[:5]  # Show first 5 blocks as preview
         }
         
+    except HTTPException:
+        # Re-raise HTTPException so it's properly handled by FastAPI
+        await db.rollback()
+        raise
     except Exception as e:
         await db.rollback()
-        print(f"Generation error: {str(e)}")
+        logger.error(f"Generation error: {str(e)}", exc_info=True)
         return {
             "message": f"Generation failed: {str(e)}",
             "error": str(e),

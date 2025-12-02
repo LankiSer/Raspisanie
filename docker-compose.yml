@@ -46,6 +46,7 @@ services:
       database:
         condition: service_healthy
     volumes:
+      - ./backend/app:/app/app:rw
       - ./backend/alembic:/app/alembic:ro
       - ./backend/scripts:/app/scripts:ro
       - backend_logs:/app/logs

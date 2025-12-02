@@ -418,7 +418,7 @@ export default {
 
     // Form
     const form = ref({
-      term_id: 1,
+      term_id: null,  // Don't use default, require user to select
       from_date: new Date().toISOString().split('T')[0],
       to_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       ruleset: {
@@ -472,10 +472,21 @@ export default {
     }
 
     const runGeneration = async () => {
+      // Validate term_id
+      if (!form.value.term_id) {
+        alert('Пожалуйста, выберите семестр перед запуском генерации.')
+        return
+      }
+      
       loading.value = true
       try {
         const response = await generationAPI.run(form.value)
         generationResult.value = response.data
+        
+        if (response.data.success === false) {
+          alert('Ошибка генерации: ' + (response.data.message || response.data.error || 'Неизвестная ошибка'))
+          return
+        }
         
         // Show success message
         alert(`Генерация завершена успешно! Создано ${response.data.created_lessons} занятий.`)
@@ -487,6 +498,8 @@ export default {
         
       } catch (error) {
         console.error('Error running generation:', error)
+        const errorMessage = error.response?.data?.detail || error.response?.data?.message || error.message || 'Неизвестная ошибка'
+        alert('Ошибка при запуске генерации: ' + errorMessage)
         alert('Ошибка при запуске генерации: ' + error.message)
       } finally {
         loading.value = false

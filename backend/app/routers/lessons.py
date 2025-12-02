@@ -9,6 +9,7 @@ from app.core.auth import get_current_active_user_or_demo
 from app.models.scheduling import LessonInstance, LessonStatus
 from app.models.facilities import TimeTableSlot, Room
 from app.models.educational import Enrollment, Group, Teacher, Course, CourseAssignment
+from app.models.academic import Term
 from app.schemas.lessons import LessonCreate, LessonUpdate, LessonResponse
 from app.models.user import User
 from app.repositories.lesson import LessonRepository
@@ -253,9 +254,25 @@ async def create_lesson(
     except ValueError:
         lesson_status = LessonStatus.PLANNED
     
+    # Get term for the lesson date
+    term_result = await db.execute(
+        select(Term).where(
+            Term.org_id == current_user.org_id,
+            Term.start_date <= lesson.date,
+            Term.end_date >= lesson.date
+        ).order_by(Term.start_date.desc())
+    )
+    term = term_result.scalar_one_or_none()
+    
+    if not term:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No term found for date {lesson.date}. Please create a term that covers this date."
+        )
+    
     new_lesson = LessonInstance(
         org_id=lesson.org_id,
-        term_id=1,  # TODO: get current term
+        term_id=term.term_id,
         date=lesson.date,
         slot_id=lesson.slot_id,
         room_id=lesson.room_id,
@@ -323,9 +340,25 @@ async def create_lessons_bulk(
         except ValueError:
             lesson_status = LessonStatus.PLANNED
         
+        # Get term for the lesson date
+        term_result = await db.execute(
+            select(Term).where(
+                Term.org_id == current_user.org_id,
+                Term.start_date <= lesson_data.date,
+                Term.end_date >= lesson_data.date
+            ).order_by(Term.start_date.desc())
+        )
+        term = term_result.scalar_one_or_none()
+        
+        if not term:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No term found for date {lesson_data.date}. Please create a term that covers this date."
+            )
+        
         new_lesson = LessonInstance(
             org_id=lesson_data.org_id,
-            term_id=1,  # TODO: get current term
+            term_id=term.term_id,
             date=lesson_data.date,
             slot_id=lesson_data.slot_id,
             room_id=lesson_data.room_id,
