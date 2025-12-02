@@ -142,29 +142,38 @@ class LessonRepository(BaseRepository[LessonInstance]):
             if room_conflict.scalar_one_or_none():
                 conflicts.append("Room is already booked for this time slot")
         
-        # Check teacher conflict
+        # Check teacher conflict - explicitly load assignment to avoid lazy loading
         enrollment_result = await self.db.execute(
-            select(Enrollment)
-            .join(CourseAssignment)
+            select(
+                CourseAssignment.teacher_id.label('teacher_id'),
+                Enrollment.group_id.label('group_id')
+            )
+            .select_from(Enrollment)
+            .join(CourseAssignment, Enrollment.assignment_id == CourseAssignment.assignment_id)
             .where(Enrollment.enrollment_id == enrollment_id)
         )
-        enrollment = enrollment_result.scalar_one_or_none()
+        enrollment_data = enrollment_result.mappings().first()
         
-        if enrollment:
+        if enrollment_data:
+            # Extract values immediately to avoid lazy loading
+            teacher_id = enrollment_data.get('teacher_id') if enrollment_data else None
+            group_id = enrollment_data.get('group_id') if enrollment_data else None
+            
+            # Check teacher conflict using explicit teacher_id
             teacher_conflict = await self.db.execute(
                 base_query
                 .join(Enrollment)
                 .join(CourseAssignment)
-                .where(CourseAssignment.teacher_id == enrollment.assignment.teacher_id)
+                .where(CourseAssignment.teacher_id == teacher_id)
             )
             if teacher_conflict.scalar_one_or_none():
                 conflicts.append("Teacher has another lesson at this time")
             
-            # Check group conflict
+            # Check group conflict using explicit group_id
             group_conflict = await self.db.execute(
                 base_query
                 .join(Enrollment)
-                .where(Enrollment.group_id == enrollment.group_id)
+                .where(Enrollment.group_id == group_id)
             )
             if group_conflict.scalar_one_or_none():
                 conflicts.append("Group has another lesson at this time")

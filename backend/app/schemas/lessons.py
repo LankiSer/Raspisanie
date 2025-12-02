@@ -27,7 +27,7 @@ class LessonBase(BaseModel):
         return v
 
 class LessonCreate(LessonBase):
-    pass
+    ignore_conflicts: Optional[bool] = Field(False, description="Ignore conflicts and create lesson anyway")
 
 class LessonUpdate(BaseModel):
     date: Optional[date] = Field(None, description="Lesson date")
@@ -79,4 +79,4 @@ class LessonResponse(BaseModel):
         return v
 
     class Config:
-        from_attributes = True
+        from_attributes = False  # We return dicts, not SQLAlchemy objects, so no need for from_attributes

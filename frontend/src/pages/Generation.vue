@@ -45,11 +45,12 @@
             <!-- Term Selection -->
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-2">
-                Семестр
+                Семестр <span class="text-gray-400 text-xs">(необязательно - будет создан автоматически)</span>
               </label>
               <select v-model="form.term_id" class="form-select">
+                <option :value="null">Автоматически (создать новый)</option>
                 <option v-for="term in terms" :key="term.term_id" :value="term.term_id">
-                  {{ term.name }}
+                  {{ term.name }} ({{ term.start_date }} - {{ term.end_date }})
                 </option>
               </select>
             </div>
@@ -446,15 +447,27 @@ export default {
       try {
         const response = await catalogAPI.getTerms()
         terms.value = response.data || []
-        if (terms.value.length > 0) {
-          form.value.term_id = terms.value[0].term_id
-        }
+        // Don't auto-select term - let user choose
+        // This prevents issues with invalid term_id
       } catch (error) {
         console.error('Error loading terms:', error)
       }
     }
 
     const generatePreview = async () => {
+      // Validate dates (term_id is now optional)
+      if (!form.value.from_date || !form.value.to_date) {
+        alert('Пожалуйста, укажите диапазон дат.')
+        return
+      }
+      
+      const fromDate = new Date(form.value.from_date)
+      const toDate = new Date(form.value.to_date)
+      if (toDate < fromDate) {
+        alert('Дата окончания должна быть позже даты начала.')
+        return
+      }
+      
       loading.value = true
       console.log('Starting preview generation with form:', form.value)
       try {
@@ -465,19 +478,15 @@ export default {
         console.log('Preview data set:', previewData.value)
       } catch (error) {
         console.error('Error generating preview:', error)
-        alert('Ошибка при генерации предварительного просмотра: ' + error.message)
+        const errorMessage = error.response?.data?.detail || error.response?.data?.message || error.message || 'Неизвестная ошибка'
+        alert('Ошибка при генерации предварительного просмотра: ' + errorMessage)
       } finally {
         loading.value = false
       }
     }
 
     const runGeneration = async () => {
-      // Validate term_id
-      if (!form.value.term_id) {
-        alert('Пожалуйста, выберите семестр перед запуском генерации.')
-        return
-      }
-      
+      // term_id is now optional - will be auto-created if not provided
       loading.value = true
       try {
         const response = await generationAPI.run(form.value)
@@ -500,7 +509,6 @@ export default {
         console.error('Error running generation:', error)
         const errorMessage = error.response?.data?.detail || error.response?.data?.message || error.message || 'Неизвестная ошибка'
         alert('Ошибка при запуске генерации: ' + errorMessage)
-        alert('Ошибка при запуске генерации: ' + error.message)
       } finally {
         loading.value = false
       }

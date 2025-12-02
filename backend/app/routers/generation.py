@@ -1,7 +1,8 @@
 """Schedule generation router."""
 
 import logging
-from typing import List, Dict, Any
+import random
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import date
@@ -12,6 +13,7 @@ from app.core.auth import get_current_active_user_or_demo
 from app.models.scheduling import LessonInstance, LessonStatus
 from app.models.educational import Enrollment, Group, Teacher, Course, CourseAssignment
 from app.models.facilities import Room, TimeTableSlot
+from app.models.academic import Term, AcademicYear
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -28,7 +30,7 @@ class GenerationRuleset(BaseModel):
     min_gap_between_blocks: int = 1
 
 class GenerationRequest(BaseModel):
-    term_id: int
+    term_id: Optional[int] = None  # Optional - will auto-create if not provided
     from_date: date
     to_date: date
     ruleset: GenerationRuleset = GenerationRuleset()
@@ -137,6 +139,11 @@ async def _preview_generation_internal(
             group_enrollments[enrollment.group_id] = []
         group_enrollments[enrollment.group_id].append(enrollment)
     
+    # Shuffle enrollments within each group to randomize course order
+    # This ensures different courses appear in different orders across groups
+    for group_id in group_enrollments:
+        random.shuffle(group_enrollments[group_id])
+    
     # Generate lessons for each day
     current_date = request.from_date
     while current_date <= request.to_date:
@@ -203,10 +210,55 @@ async def _preview_generation_internal(
                         )
                         
                         if available_room:
-                            # Choose one enrollment for this block (rotate between them)
+                            # Choose one enrollment for this block with smart randomization
+                            # Goal: avoid same course in consecutive blocks
                             if group_enrollments_list:
-                                enrollment_index = block_count % len(group_enrollments_list)
-                                enrollment = group_enrollments_list[enrollment_index]
+                                # Get the last course used for this group today (if any)
+                                last_course_id = None
+                                if proposals:
+                                    # Find last proposal for this group on this date
+                                    group_proposals_today = [
+                                        p for p in proposals 
+                                        if p.group_id == group_id and p.date == current_date
+                                    ]
+                                    if group_proposals_today:
+                                        last_proposal = group_proposals_today[-1]
+                                        last_enrollment_id = last_proposal.enrollment_id
+                                        last_enrollment = next(
+                                            (e for e in group_enrollments_list if e.enrollment_id == last_enrollment_id),
+                                            None
+                                        )
+                                        if last_enrollment and last_enrollment.assignment_id:
+                                            last_assignment = assignments_dict.get(last_enrollment.assignment_id)
+                                            if last_assignment and hasattr(last_assignment, 'course_id'):
+                                                last_course_id = last_assignment.course_id
+                                
+                                # Try to select a different course than the last one
+                                available_enrollments = group_enrollments_list.copy()
+                                if last_course_id and len(available_enrollments) > 1:
+                                    # Remove enrollments with the same course as last one
+                                    available_enrollments = [
+                                        e for e in available_enrollments
+                                        if e.assignment_id and assignments_dict.get(e.assignment_id) and 
+                                           assignments_dict[e.assignment_id].course_id != last_course_id
+                                    ]
+                                    # If we removed all, use original list
+                                    if not available_enrollments:
+                                        available_enrollments = group_enrollments_list
+                                
+                                # Use day and block_count for variety, plus randomization
+                                day_variation = current_date.day % len(available_enrollments) if len(available_enrollments) > 0 else 0
+                                base_index = (block_count + day_variation) % len(available_enrollments)
+                                
+                                # Add randomization (70% chance to use base, 30% to use different)
+                                if random.random() < 0.7 or len(available_enrollments) == 1:
+                                    enrollment_index = base_index
+                                else:
+                                    # Choose a different enrollment
+                                    other_indices = [i for i in range(len(available_enrollments)) if i != base_index]
+                                    enrollment_index = random.choice(other_indices) if other_indices else base_index
+                                
+                                enrollment = available_enrollments[enrollment_index]
                                 
                                 assignment = assignments_dict.get(enrollment.assignment_id)
                                 if assignment:
@@ -530,23 +582,27 @@ async def run_generation(
     try:
         # Verify term exists or find term by date range
         from sqlalchemy import select
-        from app.models.academic import Term
         
         logger.info(f"DEBUG: Starting generation with request.term_id={request.term_id}, from_date={request.from_date}, to_date={request.to_date}")
         
-        term_result = await db.execute(
-            select(Term).where(
-                Term.term_id == request.term_id,
-                Term.org_id == current_user.org_id
-            )
-        )
-        term = term_result.scalar_one_or_none()
+        term = None
         
-        logger.info(f"DEBUG: Initial term lookup: term_id={request.term_id}, found={term is not None}")
+        # If term_id is provided, try to find it
+        if request.term_id:
+            term_result = await db.execute(
+                select(Term).where(
+                    Term.term_id == request.term_id,
+                    Term.org_id == current_user.org_id
+                )
+            )
+            term = term_result.scalar_one_or_none()
+            logger.info(f"DEBUG: Initial term lookup: term_id={request.term_id}, found={term is not None}")
         
         # If term not found, try to find term that covers the date range
         if not term:
-            # Try to find term by date range
+            logger.info(f"DEBUG: Term {request.term_id} not found, searching by date range...")
+            
+            # First, try to find term that covers the entire date range
             term_by_date_result = await db.execute(
                 select(Term).where(
                     Term.org_id == current_user.org_id,
@@ -555,7 +611,7 @@ async def run_generation(
                 ).order_by(Term.start_date.desc())
             )
             term = term_by_date_result.scalar_one_or_none()
-            logger.info(f"DEBUG: Term by date range lookup: found={term is not None}")
+            logger.info(f"DEBUG: Term by full date range lookup: found={term is not None}")
             
             if not term:
                 # Try to find any term that covers at least the start date
@@ -568,12 +624,94 @@ async def run_generation(
                 )
                 term = term_by_start_result.scalar_one_or_none()
                 logger.info(f"DEBUG: Term by start date lookup: found={term is not None}")
+            
+            if not term:
+                # Try to find any term that covers at least the end date
+                term_by_end_result = await db.execute(
+                    select(Term).where(
+                        Term.org_id == current_user.org_id,
+                        Term.start_date <= request.to_date,
+                        Term.end_date >= request.to_date
+                    ).order_by(Term.start_date.desc())
+                )
+                term = term_by_end_result.scalar_one_or_none()
+                logger.info(f"DEBUG: Term by end date lookup: found={term is not None}")
+            
+            if not term:
+                # Last resort: find any term that overlaps with the date range
+                term_overlap_result = await db.execute(
+                    select(Term).where(
+                        Term.org_id == current_user.org_id,
+                        Term.start_date <= request.to_date,
+                        Term.end_date >= request.from_date
+                    ).order_by(Term.start_date.desc())
+                )
+                term = term_overlap_result.scalar_one_or_none()
+                logger.info(f"DEBUG: Term by overlap lookup: found={term is not None}")
+            
+            if not term:
+                # Final fallback: get any term for this org (for debugging)
+                any_term_result = await db.execute(
+                    select(Term).where(
+                        Term.org_id == current_user.org_id
+                    ).order_by(Term.start_date.desc())
+                )
+                any_term = any_term_result.scalar_one_or_none()
+                if any_term:
+                    logger.warning(f"DEBUG: Found term {any_term.term_id} but it doesn't cover the date range. Term dates: {any_term.start_date} to {any_term.end_date}")
+                else:
+                    logger.error(f"DEBUG: No terms found for org_id={current_user.org_id}")
         
+        # If still no term found, auto-create one
         if not term:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Term with ID {request.term_id} not found and no term found that covers the date range {request.from_date} to {request.to_date}. Please create a term first."
+            logger.info(f"DEBUG: No term found, auto-creating term for date range {request.from_date} to {request.to_date}")
+            
+            # Find or create academic year that covers the date range
+            academic_year_result = await db.execute(
+                select(AcademicYear).where(
+                    AcademicYear.org_id == current_user.org_id,
+                    AcademicYear.start_date <= request.from_date,
+                    AcademicYear.end_date >= request.to_date
+                ).order_by(AcademicYear.start_date.desc())
             )
+            academic_year = academic_year_result.scalar_one_or_none()
+            
+            if not academic_year:
+                # Create academic year based on the date range
+                year_start = request.from_date.year
+                year_end = request.to_date.year
+                if year_start == year_end:
+                    year_name = f"{year_start}-{year_start + 1}"
+                else:
+                    year_name = f"{year_start}-{year_end}"
+                
+                # Extend dates to cover full academic year (September to June)
+                academic_start = date(year_start, 9, 1) if request.from_date.month >= 9 else date(year_start - 1, 9, 1)
+                academic_end = date(year_start + 1, 6, 30) if request.from_date.month >= 9 else date(year_start, 6, 30)
+                
+                academic_year = AcademicYear(
+                    org_id=current_user.org_id,
+                    name=year_name,
+                    start_date=academic_start,
+                    end_date=academic_end
+                )
+                db.add(academic_year)
+                await db.flush()
+                logger.info(f"DEBUG: Created academic year {academic_year.id}: {year_name}")
+            
+            # Create term for the date range
+            term_name = f"Семестр {request.from_date.strftime('%d.%m.%Y')} - {request.to_date.strftime('%d.%m.%Y')}"
+            term = Term(
+                org_id=current_user.org_id,
+                academic_year_id=academic_year.id,
+                name=term_name,
+                start_date=request.from_date,
+                end_date=request.to_date
+            )
+            db.add(term)
+            await db.flush()
+            # Note: Don't commit here - will commit after lessons are created
+            logger.info(f"DEBUG: Auto-created term {term.term_id}: {term_name} ({term.start_date} to {term.end_date})")
         
         # Use the found term_id (either the requested one or the auto-found one)
         actual_term_id = term.term_id
@@ -755,9 +893,8 @@ async def run_generation(
         # Commit all lessons to database
         await db.commit()
         
-        # Refresh lessons to get their IDs
-        for lesson in created_lessons:
-            await db.refresh(lesson)
+        # Don't refresh lessons - we don't need to access relationships
+        # All data is already available from the proposals, and refresh can cause lazy loading issues
         
         created_count = len(created_lessons)
         

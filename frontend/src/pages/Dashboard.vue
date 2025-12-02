@@ -301,21 +301,77 @@ export default {
           stats.value.totalTeachers = 0
         }
 
+        // Load active term (term that covers today)
+        try {
+          const termsResponse = await catalogAPI.getTerms({ limit: 100 })
+          console.log('Terms response:', termsResponse)
+          const terms = Array.isArray(termsResponse.data) ? termsResponse.data : (Array.isArray(termsResponse) ? termsResponse : [])
+          console.log('Terms array:', terms)
+          
+          if (terms.length === 0) {
+            console.warn('No terms found')
+            activeTerm.value = null
+          } else {
+            const todayDate = new Date()
+            todayDate.setHours(0, 0, 0, 0) // Reset time to compare dates only
+            
+            // Find term that covers today
+            const currentTerm = terms.find(term => {
+              if (!term.start_date || !term.end_date) return false
+              const startDate = new Date(term.start_date)
+              const endDate = new Date(term.end_date)
+              startDate.setHours(0, 0, 0, 0)
+              endDate.setHours(0, 0, 0, 0)
+              return todayDate >= startDate && todayDate <= endDate
+            })
+            
+            console.log('Current term found:', currentTerm)
+            
+            // If no term covers today, find the most recent term
+            if (!currentTerm && terms.length > 0) {
+              const sortedTerms = terms.sort((a, b) => {
+                const dateA = new Date(a.start_date || 0)
+                const dateB = new Date(b.start_date || 0)
+                return dateB - dateA
+              })
+              activeTerm.value = sortedTerms[0]
+              console.log('Using most recent term:', activeTerm.value)
+            } else {
+              activeTerm.value = currentTerm || null
+            }
+          }
+        } catch (error) {
+          console.error('Error loading active term:', error)
+          activeTerm.value = null
+        }
+
         // Load lessons for this week
         try {
           const now = new Date()
           const weekStart = startOfWeek(now, { weekStartsOn: 1 })
           const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
           
+          const startDateStr = format(weekStart, 'yyyy-MM-dd')
+          const endDateStr = format(weekEnd, 'yyyy-MM-dd')
+          
+          console.log('Loading lessons for week:', startDateStr, 'to', endDateStr)
+          
           const lessonsResponse = await lessonsAPI.getByTerm({
-            start_date: format(weekStart, 'yyyy-MM-dd'),
-            end_date: format(weekEnd, 'yyyy-MM-dd')
+            start_date: startDateStr,
+            end_date: endDateStr,
+            org_id: authStore.user?.org_id || 1
           })
           
-          const weekLessons = lessonsResponse.data || lessonsResponse || []
-          stats.value.lessonsThisWeek = Array.isArray(weekLessons) ? weekLessons.length : 0
+          console.log('Lessons response:', lessonsResponse)
+          
+          const weekLessons = Array.isArray(lessonsResponse.data) 
+            ? lessonsResponse.data 
+            : (Array.isArray(lessonsResponse) ? lessonsResponse : [])
+          
+          stats.value.lessonsThisWeek = weekLessons.length
+          console.log('Lessons this week loaded:', stats.value.lessonsThisWeek, 'lessons')
         } catch (error) {
-          console.warn('Could not load lessons for week:', error)
+          console.error('Error loading lessons for week:', error)
           stats.value.lessonsThisWeek = 0
         }
 

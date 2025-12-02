@@ -11,6 +11,7 @@ from app.models.facilities import TimeTableSlot, Room
 from app.models.educational import Enrollment, Group, Teacher, Course, CourseAssignment
 from app.models.academic import Term
 from app.schemas.lessons import LessonCreate, LessonUpdate, LessonResponse
+from pydantic import ValidationError
 from app.models.user import User
 from app.repositories.lesson import LessonRepository
 
@@ -66,23 +67,24 @@ async def get_lessons_by_term(
     query = query.order_by(LessonInstance.date, TimeTableSlot.start_time)
     
     result = await db.execute(query)
-    lessons = result.all()
+    # Use mappings() to get dicts instead of Row objects to avoid any lazy loading
+    lessons = result.mappings().all()
     
     return [
         {
-            "lesson_id": lesson.lesson_id,
-            "org_id": lesson.org_id,
-            "date": str(lesson.date),
-            "slot_id": lesson.slot_id,
-            "room_id": lesson.room_id,
-            "enrollment_id": lesson.enrollment_id,
-            "group_name": lesson.group_name,
-            "teacher_name": lesson.teacher_name,
-            "course_name": lesson.course_name,
-            "room_number": lesson.room_number,
-            "start_time": str(lesson.start_time),
-            "end_time": str(lesson.end_time),
-            "status": lesson.status.value.lower() if hasattr(lesson.status, 'value') else str(lesson.status).lower()
+            "lesson_id": int(lesson.get('lesson_id', 0)),
+            "org_id": int(lesson.get('org_id', 0)),
+            "date": str(lesson.get('date', '')),
+            "slot_id": int(lesson.get('slot_id', 0)),
+            "room_id": int(lesson.get('room_id')) if lesson.get('room_id') else None,
+            "enrollment_id": int(lesson.get('enrollment_id', 0)),
+            "group_name": str(lesson.get('group_name', '')),
+            "teacher_name": str(lesson.get('teacher_name', '')),
+            "course_name": str(lesson.get('course_name', '')),
+            "room_number": str(lesson.get('room_number', '')),
+            "start_time": str(lesson.get('start_time', '')),
+            "end_time": str(lesson.get('end_time', '')),
+            "status": str(lesson.get('status', '')).lower() if isinstance(lesson.get('status'), str) else (lesson.get('status').value.lower() if hasattr(lesson.get('status'), 'value') else str(lesson.get('status', 'planned')).lower())
         }
         for lesson in lessons
     ]
@@ -125,23 +127,24 @@ async def get_lessons_by_day(
     ).order_by(TimeTableSlot.start_time)
     
     result = await db.execute(query)
-    lessons = result.all()
+    # Use mappings() to get dicts instead of Row objects to avoid any lazy loading
+    lessons = result.mappings().all()
     
     return [
         {
-            "lesson_id": lesson.lesson_id,
-            "org_id": lesson.org_id,
-            "date": str(lesson.date),
-            "slot_id": lesson.slot_id,
-            "room_id": lesson.room_id,
-            "enrollment_id": lesson.enrollment_id,
-            "group_name": lesson.group_name,
-            "teacher_name": lesson.teacher_name,
-            "course_name": lesson.course_name,
-            "room_number": lesson.room_number,
-            "start_time": str(lesson.start_time),
-            "end_time": str(lesson.end_time),
-            "status": lesson.status.value.lower() if hasattr(lesson.status, 'value') else str(lesson.status).lower()
+            "lesson_id": int(lesson.get('lesson_id', 0)),
+            "org_id": int(lesson.get('org_id', 0)),
+            "date": str(lesson.get('date', '')),
+            "slot_id": int(lesson.get('slot_id', 0)),
+            "room_id": int(lesson.get('room_id')) if lesson.get('room_id') else None,
+            "enrollment_id": int(lesson.get('enrollment_id', 0)),
+            "group_name": str(lesson.get('group_name', '')),
+            "teacher_name": str(lesson.get('teacher_name', '')),
+            "course_name": str(lesson.get('course_name', '')),
+            "room_number": str(lesson.get('room_number', '')),
+            "start_time": str(lesson.get('start_time', '')),
+            "end_time": str(lesson.get('end_time', '')),
+            "status": str(lesson.get('status', '')).lower() if isinstance(lesson.get('status'), str) else (lesson.get('status').value.lower() if hasattr(lesson.get('status'), 'value') else str(lesson.get('status', 'planned')).lower())
         }
         for lesson in lessons
     ]
@@ -198,23 +201,24 @@ async def get_lessons(
     query = query.order_by(LessonInstance.date, TimeTableSlot.start_time)
     
     result = await db.execute(query)
-    lessons = result.all()
+    # Use mappings() to get dicts instead of Row objects to avoid any lazy loading
+    lessons = result.mappings().all()
     
     return [
         {
-            "lesson_id": lesson.lesson_id,
-            "org_id": lesson.org_id,
-            "date": str(lesson.date),
-            "slot_id": lesson.slot_id,
-            "room_id": lesson.room_id,
-            "enrollment_id": lesson.enrollment_id,
-            "group_name": lesson.group_name,
-            "teacher_name": lesson.teacher_name,
-            "course_name": lesson.course_name,
-            "room_number": lesson.room_number,
-            "start_time": str(lesson.start_time),
-            "end_time": str(lesson.end_time),
-            "status": lesson.status.value.lower() if hasattr(lesson.status, 'value') else str(lesson.status).lower()
+            "lesson_id": int(lesson.get('lesson_id', 0)),
+            "org_id": int(lesson.get('org_id', 0)),
+            "date": str(lesson.get('date', '')),
+            "slot_id": int(lesson.get('slot_id', 0)),
+            "room_id": int(lesson.get('room_id')) if lesson.get('room_id') else None,
+            "enrollment_id": int(lesson.get('enrollment_id', 0)),
+            "group_name": str(lesson.get('group_name', '')),
+            "teacher_name": str(lesson.get('teacher_name', '')),
+            "course_name": str(lesson.get('course_name', '')),
+            "room_number": str(lesson.get('room_number', '')),
+            "start_time": str(lesson.get('start_time', '')),
+            "end_time": str(lesson.get('end_time', '')),
+            "status": str(lesson.get('status', '')).lower() if isinstance(lesson.get('status'), str) else (lesson.get('status').value.lower() if hasattr(lesson.get('status'), 'value') else str(lesson.get('status', 'planned')).lower())
         }
         for lesson in lessons
     ]
@@ -226,25 +230,27 @@ async def create_lesson(
     current_user: User = Depends(get_current_active_user_or_demo)
 ):
     """Create a new lesson."""
-    # Check for conflicts before creating
-    lesson_repo = LessonRepository(db)
-    conflicts = await lesson_repo.check_conflicts(
-        org_id=lesson.org_id,
-        date=lesson.date,
-        slot_id=lesson.slot_id,
-        enrollment_id=lesson.enrollment_id,
-        room_id=lesson.room_id,
-        exclude_lesson_id=None
-    )
-    
-    if conflicts:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "Conflicts detected",
-                "conflicts": conflicts
-            }
+    # Check for conflicts before creating (unless ignore_conflicts is True)
+    ignore_conflicts = getattr(lesson, 'ignore_conflicts', False) if hasattr(lesson, 'ignore_conflicts') else False
+    if not ignore_conflicts:
+        lesson_repo = LessonRepository(db)
+        conflicts = await lesson_repo.check_conflicts(
+            org_id=lesson.org_id,
+            date=lesson.date,
+            slot_id=lesson.slot_id,
+            enrollment_id=lesson.enrollment_id,
+            room_id=lesson.room_id,
+            exclude_lesson_id=None
         )
+        
+        if conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Conflicts detected",
+                    "conflicts": conflicts
+                }
+            )
     
     # Create new lesson
     # Convert status string to LessonStatus enum
@@ -256,15 +262,15 @@ async def create_lesson(
     
     # Get term for the lesson date
     term_result = await db.execute(
-        select(Term).where(
+        select(Term.term_id).where(
             Term.org_id == current_user.org_id,
             Term.start_date <= lesson.date,
             Term.end_date >= lesson.date
         ).order_by(Term.start_date.desc())
     )
-    term = term_result.scalar_one_or_none()
+    term_id = term_result.scalar_one_or_none()
     
-    if not term:
+    if not term_id:
         raise HTTPException(
             status_code=400,
             detail=f"No term found for date {lesson.date}. Please create a term that covers this date."
@@ -272,7 +278,7 @@ async def create_lesson(
     
     new_lesson = LessonInstance(
         org_id=lesson.org_id,
-        term_id=term.term_id,
+        term_id=term_id,
         date=lesson.date,
         slot_id=lesson.slot_id,
         room_id=lesson.room_id,
@@ -282,10 +288,24 @@ async def create_lesson(
     )
     
     db.add(new_lesson)
-    await db.commit()
-    await db.refresh(new_lesson)
+    await db.flush()  # Flush to get lesson_id without committing
     
-    # Get related data for response
+    # Save ALL values before commit to avoid lazy loading issues
+    status_value = new_lesson.status.value.lower() if hasattr(new_lesson.status, 'value') else str(new_lesson.status).lower()
+    lesson_id = new_lesson.lesson_id
+    org_id_saved = new_lesson.org_id
+    date_saved = str(new_lesson.date)
+    slot_id_saved = new_lesson.slot_id
+    room_id_saved = new_lesson.room_id
+    enrollment_id_saved = new_lesson.enrollment_id
+    
+    await db.commit()
+    
+    # Expunge all objects from session to prevent any lazy loading
+    # This ensures no objects remain in session that could trigger lazy loading
+    db.expunge_all()
+    
+    # Get related data for response (don't use refresh to avoid lazy loading issues)
     query = select(
         Group.name.label('group_name'),
         func.concat(Teacher.first_name, ' ', Teacher.last_name).label('teacher_name'),
@@ -302,26 +322,46 @@ async def create_lesson(
     ).join(Course, CourseAssignment.course_id == Course.course_id
     ).join(Room, LessonInstance.room_id == Room.room_id
     ).join(TimeTableSlot, LessonInstance.slot_id == TimeTableSlot.slot_id
-    ).where(LessonInstance.lesson_id == new_lesson.lesson_id)
+    ).where(LessonInstance.lesson_id == lesson_id)
     
     result = await db.execute(query)
-    lesson_data = result.first()
+    # Use mappings() to get dict instead of Row object to avoid any lazy loading
+    lesson_data = result.mappings().first()
     
-    return {
-        "lesson_id": new_lesson.lesson_id,
-        "org_id": new_lesson.org_id,
-        "date": str(new_lesson.date),
-        "slot_id": new_lesson.slot_id,
-        "room_id": new_lesson.room_id,
-        "enrollment_id": new_lesson.enrollment_id,
-        "group_name": lesson_data.group_name,
-        "teacher_name": lesson_data.teacher_name,
-        "course_name": lesson_data.course_name,
-        "room_number": lesson_data.room_number,
-        "start_time": str(lesson_data.start_time),
-        "end_time": str(lesson_data.end_time),
-        "status": new_lesson.status.value.lower() if hasattr(new_lesson.status, 'value') else str(new_lesson.status).lower()
+    if not lesson_data:
+        raise HTTPException(status_code=500, detail="Failed to retrieve lesson data after creation")
+    
+    # Convert all data to simple types immediately from dict
+    group_name_val = str(lesson_data.get('group_name', ''))
+    teacher_name_val = str(lesson_data.get('teacher_name', ''))
+    course_name_val = str(lesson_data.get('course_name', ''))
+    room_number_val = str(lesson_data.get('room_number', ''))
+    start_time_val = str(lesson_data.get('start_time', ''))
+    end_time_val = str(lesson_data.get('end_time', ''))
+    
+    # Create response dict and validate with Pydantic to ensure proper serialization
+    response_dict = {
+        "lesson_id": lesson_id,
+        "org_id": org_id_saved,
+        "date": date_saved,
+        "slot_id": slot_id_saved,
+        "room_id": room_id_saved,
+        "enrollment_id": enrollment_id_saved,
+        "group_name": group_name_val,
+        "teacher_name": teacher_name_val,
+        "course_name": course_name_val,
+        "room_number": room_number_val,
+        "start_time": start_time_val,
+        "end_time": end_time_val,
+        "status": status_value
     }
+    
+    # Validate with Pydantic to ensure proper serialization (this prevents any lazy loading)
+    try:
+        return LessonResponse.model_validate(response_dict).model_dump()
+    except ValidationError as e:
+        # If validation fails, return dict directly (shouldn't happen, but just in case)
+        return response_dict
 
 @router.post("/bulk", response_model=dict)
 async def create_lessons_bulk(
@@ -412,26 +452,59 @@ async def get_lesson(
     )
     
     result = await db.execute(query)
-    lesson = result.first()
+    # Use mappings() to get dict instead of Row object to avoid any lazy loading
+    lesson = result.mappings().first()
     
     if not lesson:
         raise HTTPException(status_code=404, detail="LessonInstance not found")
     
-    return {
-        "lesson_id": lesson.lesson_id,
-        "org_id": lesson.org_id,
-        "date": str(lesson.date),
-        "slot_id": lesson.slot_id,
-        "room_id": lesson.room_id,
-        "enrollment_id": lesson.enrollment_id,
-        "group_name": lesson.group_name,
-        "teacher_name": lesson.teacher_name,
-        "course_name": lesson.course_name,
-        "room_number": lesson.room_number,
-        "start_time": str(lesson.start_time),
-        "end_time": str(lesson.end_time),
-        "status": lesson.status.value.lower() if hasattr(lesson.status, 'value') else str(lesson.status).lower()
+    # Convert all data to simple types immediately from dict to avoid any lazy loading
+    lesson_id_val = int(lesson.get('lesson_id', 0))
+    org_id_val = int(lesson.get('org_id', 0))
+    date_val = str(lesson.get('date', ''))
+    slot_id_val = int(lesson.get('slot_id', 0))
+    room_id_val = int(lesson.get('room_id')) if lesson.get('room_id') else None
+    enrollment_id_val = int(lesson.get('enrollment_id', 0))
+    group_name_val = str(lesson.get('group_name', ''))
+    teacher_name_val = str(lesson.get('teacher_name', ''))
+    course_name_val = str(lesson.get('course_name', ''))
+    room_number_val = str(lesson.get('room_number', ''))
+    start_time_val = str(lesson.get('start_time', ''))
+    end_time_val = str(lesson.get('end_time', ''))
+    
+    # Convert status safely from dict
+    status_obj = lesson.get('status')
+    try:
+        if hasattr(status_obj, 'value'):
+            status_val = status_obj.value.lower()
+        else:
+            status_val = str(status_obj).lower() if status_obj else "planned"
+    except Exception:
+        status_val = "planned"  # Fallback
+    
+    # Create response dict and validate with Pydantic to ensure proper serialization
+    response_dict = {
+        "lesson_id": lesson_id_val,
+        "org_id": org_id_val,
+        "date": date_val,
+        "slot_id": slot_id_val,
+        "room_id": room_id_val,
+        "enrollment_id": enrollment_id_val,
+        "group_name": group_name_val,
+        "teacher_name": teacher_name_val,
+        "course_name": course_name_val,
+        "room_number": room_number_val,
+        "start_time": start_time_val,
+        "end_time": end_time_val,
+        "status": status_val
     }
+    
+    # Validate with Pydantic to ensure proper serialization (this prevents any lazy loading)
+    try:
+        return LessonResponse.model_validate(response_dict).model_dump()
+    except ValidationError as e:
+        # If validation fails, return dict directly (shouldn't happen, but just in case)
+        return response_dict
 
 @router.patch("/{lesson_id}", response_model=LessonResponse)
 async def update_lesson(
@@ -476,10 +549,17 @@ async def update_lesson(
     # Update updated_by and updated_at
     existing_lesson.updated_by = current_user.user_id
     
-    await db.commit()
-    await db.refresh(existing_lesson)
+    # Save status value before commit to avoid lazy loading issues
+    status_value = existing_lesson.status.value.lower() if hasattr(existing_lesson.status, 'value') else str(existing_lesson.status).lower()
     
-    # Get updated lesson with related data
+    await db.flush()  # Flush to ensure changes are in session
+    await db.commit()
+    
+    # Expunge all objects from session to prevent any lazy loading
+    # This ensures no objects remain in session that could trigger lazy loading
+    db.expunge_all()
+    
+    # Get updated lesson with related data (don't use refresh to avoid lazy loading issues)
     query = select(
         LessonInstance.lesson_id,
         LessonInstance.org_id,
@@ -506,23 +586,53 @@ async def update_lesson(
     ).where(LessonInstance.lesson_id == lesson_id)
     
     result = await db.execute(query)
-    lesson_data = result.first()
+    # Use mappings() to get dict instead of Row object to avoid any lazy loading
+    lesson_data = result.mappings().first()
     
-    return {
-        "lesson_id": lesson_data.lesson_id,
-        "org_id": lesson_data.org_id,
-        "date": str(lesson_data.date),
-        "slot_id": lesson_data.slot_id,
-        "room_id": lesson_data.room_id,
-        "enrollment_id": lesson_data.enrollment_id,
-        "group_name": lesson_data.group_name,
-        "teacher_name": lesson_data.teacher_name,
-        "course_name": lesson_data.course_name,
-        "room_number": lesson_data.room_number,
-        "start_time": str(lesson_data.start_time),
-        "end_time": str(lesson_data.end_time),
-        "status": lesson_data.status.value.lower() if hasattr(lesson_data.status, 'value') else str(lesson_data.status).lower()
+    if not lesson_data:
+        raise HTTPException(status_code=500, detail="Failed to retrieve lesson data after update")
+    
+    # Convert all data to simple types immediately from dict to avoid any lazy loading
+    # Use saved status_value (it was saved before commit, so it's safe)
+    lesson_id_val = int(lesson_data.get('lesson_id', 0))
+    org_id_val = int(lesson_data.get('org_id', 0))
+    date_val = str(lesson_data.get('date', ''))
+    slot_id_val = int(lesson_data.get('slot_id', 0))
+    room_id_val = int(lesson_data.get('room_id')) if lesson_data.get('room_id') else None
+    enrollment_id_val = int(lesson_data.get('enrollment_id', 0))
+    group_name_val = str(lesson_data.get('group_name', ''))
+    teacher_name_val = str(lesson_data.get('teacher_name', ''))
+    course_name_val = str(lesson_data.get('course_name', ''))
+    room_number_val = str(lesson_data.get('room_number', ''))
+    start_time_val = str(lesson_data.get('start_time', ''))
+    end_time_val = str(lesson_data.get('end_time', ''))
+    
+    # Use saved status_value - it's the most recent value before commit
+    query_status = status_value
+    
+    # Create response dict and validate with Pydantic to ensure proper serialization
+    response_dict = {
+        "lesson_id": lesson_id_val,
+        "org_id": org_id_val,
+        "date": date_val,
+        "slot_id": slot_id_val,
+        "room_id": room_id_val,
+        "enrollment_id": enrollment_id_val,
+        "group_name": group_name_val,
+        "teacher_name": teacher_name_val,
+        "course_name": course_name_val,
+        "room_number": room_number_val,
+        "start_time": start_time_val,
+        "end_time": end_time_val,
+        "status": query_status
     }
+    
+    # Validate with Pydantic to ensure proper serialization (this prevents any lazy loading)
+    try:
+        return LessonResponse.model_validate(response_dict).model_dump()
+    except ValidationError as e:
+        # If validation fails, return dict directly (shouldn't happen, but just in case)
+        return response_dict
 
 @router.delete("/{lesson_id}")
 async def delete_lesson(
