@@ -80,7 +80,7 @@ async def get_lessons_by_term(
             "room_number": lesson.room_number,
             "start_time": str(lesson.start_time),
             "end_time": str(lesson.end_time),
-            "status": lesson.status
+            "status": lesson.status.upper()
         }
         for lesson in lessons
     ]
@@ -139,7 +139,7 @@ async def get_lessons_by_day(
             "room_number": lesson.room_number,
             "start_time": str(lesson.start_time),
             "end_time": str(lesson.end_time),
-            "status": lesson.status
+            "status": lesson.status.upper()
         }
         for lesson in lessons
     ]
@@ -212,7 +212,7 @@ async def get_lessons(
             "room_number": lesson.room_number,
             "start_time": str(lesson.start_time),
             "end_time": str(lesson.end_time),
-            "status": lesson.status
+            "status": lesson.status.upper()
         }
         for lesson in lessons
     ]
@@ -231,7 +231,7 @@ async def create_lesson(
         slot_id=lesson.slot_id,
         room_id=lesson.room_id,
         enrollment_id=lesson.enrollment_id,
-        status=lesson.status or "scheduled"
+        status=lesson.status.upper().upper() or "PLANNED"
     )
     
     db.add(new_lesson)
@@ -273,7 +273,7 @@ async def create_lesson(
         "room_number": lesson_data.room_number,
         "start_time": str(lesson_data.start_time),
         "end_time": str(lesson_data.end_time),
-        "status": new_lesson.status
+        "status": new_lesson.status.upper()
     }
 
 @router.post("/bulk", response_model=dict)
@@ -292,7 +292,7 @@ async def create_lessons_bulk(
             slot_id=lesson_data.slot_id,
             room_id=lesson_data.room_id,
             enrollment_id=lesson_data.enrollment_id,
-            status=lesson_data.status or "scheduled"
+            status=lesson_data.status or "PLANNED"
         )
         db.add(new_lesson)
         created_lessons.append(new_lesson)
@@ -358,7 +358,7 @@ async def get_lesson(
         "room_number": lesson.room_number,
         "start_time": str(lesson.start_time),
         "end_time": str(lesson.end_time),
-        "status": lesson.status
+        "status": lesson.status.upper()
     }
 
 @router.patch("/{lesson_id}", response_model=LessonResponse)
@@ -461,7 +461,7 @@ async def delete_lesson(
         raise HTTPException(status_code=404, detail="LessonInstance not found")
     
     # Soft delete - set is_active to False
-    existing_lesson.is_active = False
+    existing_lesson.status = LessonStatus.CANCELLED
     await db.commit()
     
     return {"message": "LessonInstance deleted successfully"}
