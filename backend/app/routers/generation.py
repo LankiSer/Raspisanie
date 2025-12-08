@@ -5,7 +5,7 @@ import random
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from datetime import date
+from datetime import date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -121,7 +121,6 @@ async def _preview_generation_internal(
     # Generate lessons and blocks
     proposals = []
     blocks = []
-    current_date = request.from_date
     
     # Calculate lessons per week for each enrollment
     lessons_per_week_per_enrollment = {}
@@ -311,7 +310,11 @@ async def _preview_generation_internal(
                     else:
                         break  # No available slots, stop trying
         
-        current_date = date(current_date.year, current_date.month, current_date.day + 1)
+        # Move to next day (for both weekdays and weekends)
+        # Ensure current_date is a date object before adding timedelta
+        if not isinstance(current_date, date):
+            raise ValueError(f"current_date is not a date object: {type(current_date)}")
+        current_date = current_date + timedelta(days=1)
     
     # Calculate stats
     stats = {
