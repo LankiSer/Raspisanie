@@ -144,7 +144,14 @@ async def _preview_generation_internal(
         random.shuffle(group_enrollments[group_id])
     
     # Generate lessons for each day
+    # Ensure from_date and to_date are valid date objects
+    if not isinstance(request.from_date, date):
+        raise ValueError(f"from_date must be a date object, got {type(request.from_date)}")
+    if not isinstance(request.to_date, date):
+        raise ValueError(f"to_date must be a date object, got {type(request.to_date)}")
+    
     current_date = request.from_date
+    logger.debug(f"Starting date iteration from {current_date} to {request.to_date}")
     while current_date <= request.to_date:
         if current_date.weekday() < 5:  # Monday=0, Sunday=6
             # Generate blocks for each group (distribute across days)
@@ -310,11 +317,14 @@ async def _preview_generation_internal(
                     else:
                         break  # No available slots, stop trying
         
-        # Move to next day (for both weekdays and weekends)
-        # Ensure current_date is a date object before adding timedelta
-        if not isinstance(current_date, date):
-            raise ValueError(f"current_date is not a date object: {type(current_date)}")
-        current_date = current_date + timedelta(days=1)
+        # Use timedelta to safely add one day (handles month/year boundaries correctly)
+        try:
+            logger.debug(f"Incrementing date from {current_date} (type: {type(current_date)})")
+            current_date = current_date + timedelta(days=1)
+            logger.debug(f"New date: {current_date}")
+        except (ValueError, TypeError) as e:
+            logger.error(f"Error incrementing date from {current_date} (type: {type(current_date)}): {e}")
+            raise ValueError(f"Error incrementing date from {current_date}: {e}") from e
     
     # Calculate stats
     stats = {

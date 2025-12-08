@@ -26,7 +26,11 @@
               >
                 Расписание
               </router-link>
-              <div class="relative" @mouseenter="showCatalogMenu = true" @mouseleave="showCatalogMenu = false">
+              <div 
+                class="relative" 
+                @mouseenter="handleMenuEnter" 
+                @mouseleave="handleMenuLeave"
+              >
                 <button
                   class="border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm inline-flex items-center"
                 >
@@ -36,6 +40,8 @@
                 <div
                   v-show="showCatalogMenu"
                   class="absolute z-10 left-0 mt-1 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5"
+                  @mouseenter="handleMenuEnter"
+                  @mouseleave="handleMenuLeave"
                 >
                   <div class="py-1">
                     <router-link to="/catalog/groups" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
@@ -146,6 +152,7 @@ export default {
     const authStore = useAuthStore()
     const showCatalogMenu = ref(false)
     const notifications = ref([])
+    let menuCloseTimeout = null
 
     // Auto-hide notifications
     const addNotification = (message, type = 'info') => {
@@ -173,6 +180,25 @@ export default {
       }
     }
 
+    // Handle menu with delay to prevent accidental closing
+    const handleMenuEnter = () => {
+      // Clear any pending close timeout
+      if (menuCloseTimeout) {
+        clearTimeout(menuCloseTimeout)
+        menuCloseTimeout = null
+      }
+      // Show menu immediately
+      showCatalogMenu.value = true
+    }
+
+    const handleMenuLeave = () => {
+      // Add delay before closing (300ms) to allow user to move mouse to menu
+      menuCloseTimeout = setTimeout(() => {
+        showCatalogMenu.value = false
+        menuCloseTimeout = null
+      }, 300)
+    }
+
     // Global error handler for API calls
     window.addEventListener('unhandledrejection', (event) => {
       if (event.reason?.response?.status === 401) {
@@ -187,7 +213,9 @@ export default {
       notifications,
       addNotification,
       removeNotification,
-      logout
+      logout,
+      handleMenuEnter,
+      handleMenuLeave
     }
   }
 }
