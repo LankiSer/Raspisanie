@@ -713,9 +713,18 @@ async def run_generation(
             # Note: Don't commit here - will commit after lessons are created
             logger.info(f"DEBUG: Auto-created term {term.term_id}: {term_name} ({term.start_date} to {term.end_date})")
         
+        # Ensure term covers the entire requested date range
+        # If term was found but doesn't cover the full range, extend it
+        if term.start_date > request.from_date or term.end_date < request.to_date:
+            logger.warning(f"DEBUG: Term {term.term_id} ({term.start_date} to {term.end_date}) doesn't cover full range ({request.from_date} to {request.to_date}). Extending...")
+            term.start_date = min(term.start_date, request.from_date)
+            term.end_date = max(term.end_date, request.to_date)
+            await db.flush()
+            logger.info(f"DEBUG: Extended term {term.term_id} to cover {term.start_date} to {term.end_date}")
+        
         # Use the found term_id (either the requested one or the auto-found one)
         actual_term_id = term.term_id
-        logger.info(f"DEBUG: Using term_id={actual_term_id} for generation (requested was {request.term_id})")
+        logger.info(f"DEBUG: Using term_id={actual_term_id} for generation (requested was {request.term_id}), term covers {term.start_date} to {term.end_date}")
         
         # Generate preview first
         preview_result = await _preview_generation_internal(request, db, current_user)
