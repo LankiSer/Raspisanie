@@ -750,57 +750,63 @@ async def run_generation(
             min_proposal_date = min(proposal_dates)
             max_proposal_date = max(proposal_dates)
             
-            logger.info(f"Proposal date range: {min_proposal_date} to {max_proposal_date}, term range: {term.start_date} to {term.end_date}")
+            logger.info(f"DEBUG: Proposal date range: {min_proposal_date} to {max_proposal_date}")
+            logger.info(f"DEBUG: Current term range: {term.start_date} to {term.end_date}")
+            logger.info(f"DEBUG: Term ID: {term.term_id}")
             
             # If term doesn't cover all proposal dates, extend it
-            if term.start_date > min_proposal_date or term.end_date < max_proposal_date:
-                logger.warning(f"Term {term.term_id} doesn't cover all proposal dates. Extending from {term.start_date}-{term.end_date} to {min_proposal_date}-{max_proposal_date}")
+            needs_extension = False
+            if term.start_date > min_proposal_date:
+                logger.warning(f"DEBUG: Term start_date {term.start_date} > min_proposal_date {min_proposal_date}, need to extend")
+                needs_extension = True
+            if term.end_date < max_proposal_date:
+                logger.warning(f"DEBUG: Term end_date {term.end_date} < max_proposal_date {max_proposal_date}, need to extend")
+                needs_extension = True
+            
+            if needs_extension:
+                old_start = term.start_date
+                old_end = term.end_date
                 term.start_date = min(term.start_date, min_proposal_date)
                 term.end_date = max(term.end_date, max_proposal_date)
                 await db.flush()
-                logger.info(f"Extended term {term.term_id} to cover {term.start_date} to {term.end_date}")
-        
-        # Store the term we found/created to check it first before querying
-        # This helps when term was just created via flush() and might not be visible in queries yet
-        newly_created_term = term
+                logger.info(f"DEBUG: Extended term {term.term_id} from {old_start}-{old_end} to {term.start_date}-{term.end_date}")
         
         # Verify term has term_id after flush
-        if not newly_created_term.term_id:
+        if not term.term_id:
             await db.rollback()
             raise HTTPException(
                 status_code=500,
                 detail="Failed to create term: term_id is None after flush()."
             )
         
-        logger.info(f"Using term {newly_created_term.term_id} ({newly_created_term.start_date} to {newly_created_term.end_date}) for all proposals")
+        logger.info(f"DEBUG: Final term state - ID: {term.term_id}, range: {term.start_date} to {term.end_date}")
         
         # Create lessons from proposals and save to database
         created_lessons = []
-        for proposal in preview_result.proposals:
-            # First, check if the newly created term covers this date
-            proposal_term = None
-            if newly_created_term.start_date <= proposal.date <= newly_created_term.end_date:
-                # Use the newly created term
-                proposal_term = newly_created_term
-                logger.debug(f"Using term {proposal_term.term_id} for date {proposal.date}")
-            else:
-                # This shouldn't happen if we extended the term correctly, but search anyway
-                logger.warning(f"Date {proposal.date} not in term range {newly_created_term.start_date}-{newly_created_term.end_date}, searching for other term...")
-                proposal_term_result = await db.execute(
-                    select(Term).where(
-                        Term.org_id == current_user.org_id,
-                        Term.start_date <= proposal.date,
-                        Term.end_date >= proposal.date
-                    ).order_by(Term.start_date.desc())
-                )
-                proposal_term = proposal_term_result.scalar_one_or_none()
+        for idx, proposal in enumerate(preview_result.proposals):
+            logger.info(f"DEBUG: Processing proposal {idx+1}/{len(preview_result.proposals)}: date={proposal.date}")
             
-            if not proposal_term:
-                # Rollback any pending changes
+            # Check if proposal date is within term range
+            if proposal.date < term.start_date or proposal.date > term.end_date:
+                logger.error(f"DEBUG: Proposal date {proposal.date} is OUTSIDE term range {term.start_date} to {term.end_date}")
                 await db.rollback()
                 raise HTTPException(
                     status_code=400,
-                    detail=f"No term found that covers date {proposal.date}. Term {newly_created_term.term_id} covers {newly_created_term.start_date} to {newly_created_term.end_date}, but proposal date is {proposal.date}. Please create a term that covers all dates in the generation range ({request.from_date} to {request.to_date})."
+                    detail=f"No term found that covers date {proposal.date}. Term {term.term_id} covers {term.start_date} to {term.end_date}, but proposal date is {proposal.date}. This should not happen after term extension."
+                )
+            
+            # Use the term we found/created/extended
+            proposal_term = term
+            lesson_term_id = proposal_term.term_id
+            
+            logger.info(f"DEBUG: Using term {lesson_term_id} for proposal date {proposal.date}")
+            
+            # Double-check that term_id is valid
+            if not lesson_term_id or lesson_term_id <= 0:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid term_id {lesson_term_id} found for date {proposal.date}."
                 )
             
             # Ensure we're using the found term_id
