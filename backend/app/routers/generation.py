@@ -744,21 +744,48 @@ async def run_generation(
                 )
             )
         
+        # Check all proposal dates and ensure term covers them all
+        if preview_result.proposals:
+            proposal_dates = [p.date for p in preview_result.proposals]
+            min_proposal_date = min(proposal_dates)
+            max_proposal_date = max(proposal_dates)
+            
+            logger.info(f"Proposal date range: {min_proposal_date} to {max_proposal_date}, term range: {term.start_date} to {term.end_date}")
+            
+            # If term doesn't cover all proposal dates, extend it
+            if term.start_date > min_proposal_date or term.end_date < max_proposal_date:
+                logger.warning(f"Term {term.term_id} doesn't cover all proposal dates. Extending from {term.start_date}-{term.end_date} to {min_proposal_date}-{max_proposal_date}")
+                term.start_date = min(term.start_date, min_proposal_date)
+                term.end_date = max(term.end_date, max_proposal_date)
+                await db.flush()
+                logger.info(f"Extended term {term.term_id} to cover {term.start_date} to {term.end_date}")
+        
         # Store the term we found/created to check it first before querying
         # This helps when term was just created via flush() and might not be visible in queries yet
         newly_created_term = term
         
+        # Verify term has term_id after flush
+        if not newly_created_term.term_id:
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create term: term_id is None after flush()."
+            )
+        
+        logger.info(f"Using term {newly_created_term.term_id} ({newly_created_term.start_date} to {newly_created_term.end_date}) for all proposals")
+        
         # Create lessons from proposals and save to database
         created_lessons = []
         for proposal in preview_result.proposals:
-            # First, check if the newly created term (if any) covers this date
+            # First, check if the newly created term covers this date
             proposal_term = None
-            if newly_created_term and newly_created_term.start_date <= proposal.date <= newly_created_term.end_date:
+            if newly_created_term.start_date <= proposal.date <= newly_created_term.end_date:
                 # Use the newly created term
                 proposal_term = newly_created_term
-                logger.info(f"Using newly created term {proposal_term.term_id} for date {proposal.date}")
+                logger.debug(f"Using term {proposal_term.term_id} for date {proposal.date}")
             else:
-                # Search for existing term that covers this date
+                # This shouldn't happen if we extended the term correctly, but search anyway
+                logger.warning(f"Date {proposal.date} not in term range {newly_created_term.start_date}-{newly_created_term.end_date}, searching for other term...")
                 proposal_term_result = await db.execute(
                     select(Term).where(
                         Term.org_id == current_user.org_id,
@@ -773,7 +800,7 @@ async def run_generation(
                 await db.rollback()
                 raise HTTPException(
                     status_code=400,
-                    detail=f"No term found that covers date {proposal.date}. Please create a term that covers all dates in the generation range ({request.from_date} to {request.to_date})."
+                    detail=f"No term found that covers date {proposal.date}. Term {newly_created_term.term_id} covers {newly_created_term.start_date} to {newly_created_term.end_date}, but proposal date is {proposal.date}. Please create a term that covers all dates in the generation range ({request.from_date} to {request.to_date})."
                 )
             
             # Ensure we're using the found term_id
