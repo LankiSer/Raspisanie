@@ -5,12 +5,14 @@ from .academic import AcademicYear, Term
 from .educational import Group, Teacher, Course, CourseAssignment, Enrollment
 from .facilities import Room, TimeTableSlot, TeacherAvailability, Holiday
 from .scheduling import LessonInstance, LessonStatus, ChangeLog, GenerationJob, GenerationStatus, GenerationScope
+from .tg_chat import TgChat, TgMessage
 
 __all__ = [
     "Organization",
     "User", "UserRole",
     "AcademicYear", "Term",
     "Group", "Teacher", "Course", "CourseAssignment", "Enrollment",
-    "Room", "TimeTableSlot", "TeacherAvailability", "Holiday", 
-    "LessonInstance", "LessonStatus", "ChangeLog", "GenerationJob", "GenerationStatus", "GenerationScope"
+    "Room", "TimeTableSlot", "TeacherAvailability", "Holiday",
+    "LessonInstance", "LessonStatus", "ChangeLog", "GenerationJob", "GenerationStatus", "GenerationScope",
+    "TgChat", "TgMessage",
 ]

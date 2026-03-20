@@ -260,7 +260,7 @@ def upgrade():
         sa.Column('slot_id', sa.Integer(), nullable=False),
         sa.Column('room_id', sa.Integer(), nullable=True),
         sa.Column('enrollment_id', sa.Integer(), nullable=False),
-        sa.Column('status', postgresql.ENUM('PLANNED', 'SCHEDULED', 'CANCELLED', 'COMPLETED', name='lessonstatus', create_type=False), nullable=False, server_default='PLANNED'),
+        sa.Column('status', postgresql.ENUM('PLANNED', 'CONFIRMED', 'COMPLETED', 'CANCELLED', 'SKIPPED', 'MOVED', name='lessonstatus', create_type=False), nullable=False, server_default='PLANNED'),
         sa.Column('reason', sa.Text(), nullable=True),
         sa.Column('created_by', sa.Integer(), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),

@@ -196,6 +196,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { XMarkIcon, ExclamationTriangleIcon } from '@heroicons/vue/24/outline'
 import { lessonsAPI, catalogAPI } from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 import { format, addDays } from 'date-fns'
 
 export default {
@@ -220,10 +221,15 @@ export default {
     initialSlotId: {
       type: [Number, String],
       default: null
+    },
+    initialGroupId: {
+      type: [Number, String],
+      default: null
     }
   },
   emits: ['close', 'saved'],
   setup(props, { emit }) {
+    const authStore = useAuthStore()
     const loading = ref(false)
     const error = ref('')
     const conflicts = ref([])
@@ -293,7 +299,7 @@ export default {
       form.value = {
         date: props.initialDate || format(new Date(), 'yyyy-MM-dd'),
         slot_id: props.initialSlotId || '',
-        group_id: '',
+        group_id: props.initialGroupId || '',
         enrollment_id: '',
         room_id: '',
         status: 'planned',
@@ -366,13 +372,24 @@ export default {
       error.value = ''
       
       try {
+        const slotNum = Number(form.value.slot_id)
+        const enrNum = Number(form.value.enrollment_id)
+        if (!Number.isFinite(slotNum) || slotNum < 1) {
+          error.value = 'Выберите корректный временной слот'
+          loading.value = false
+          return
+        }
+        if (!Number.isFinite(enrNum) || enrNum < 1) {
+          error.value = 'Выберите предмет и преподавателя'
+          loading.value = false
+          return
+        }
         const data = {
           date: form.value.date,
-          slot_id: parseInt(form.value.slot_id),
-          enrollment_id: parseInt(form.value.enrollment_id),
-          room_id: form.value.room_id ? parseInt(form.value.room_id) : null,
-          org_id: 1, // TODO: get from auth store
-          term_id: 1 // TODO: get current term
+          slot_id: slotNum,
+          enrollment_id: enrNum,
+          room_id: form.value.room_id ? parseInt(form.value.room_id, 10) : null,
+          org_id: authStore.user?.org_id ?? 1
         }
         
         if (isEditing.value) {

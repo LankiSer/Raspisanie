@@ -1,6 +1,6 @@
 """Authentication and authorization utilities."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import hashlib
 
@@ -58,9 +58,9 @@ def create_access_token(
     """Create JWT access token."""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(seconds=settings.JWT_EXPIRES)
+        expire = datetime.now(timezone.utc) + timedelta(seconds=settings.JWT_EXPIRES)
     
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(
@@ -137,8 +137,7 @@ async def get_current_user_or_demo(
     try:
         payload = decode_token(credentials.credentials)
         user_id: str = payload.get("sub")
-        org_id: int = payload.get("org_id", 1)
-        
+
         if user_id is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -150,18 +149,7 @@ async def get_current_user_or_demo(
             detail="Could not validate credentials"
         )
     
-    # For demo user (user_id = "1"), return a mock user object
-    if user_id == "1":
-        from ..models.user import User
-        demo_user = User()
-        demo_user.user_id = 1
-        demo_user.org_id = 1  # Always use org_id = 1 for demo
-        demo_user.email = "demo@university.edu"
-        demo_user.role = "admin"
-        demo_user.is_active = True
-        return demo_user
-    
-    # For real users, look up in database
+    # Look up real user in database
     user_repo = UserRepository(db)
     user = await user_repo.get_by_id(int(user_id))
     if user is None:
@@ -169,9 +157,6 @@ async def get_current_user_or_demo(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
         )
-    
-    # Ensure all users use org_id = 1 for consistency
-    user.org_id = 1
     return user
 
 

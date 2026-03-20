@@ -1,219 +1,146 @@
 <template>
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <div class="page-container">
     <!-- Header -->
-    <div class="mb-8">
-      <h1 class="text-2xl font-bold text-gray-900">Дашборд</h1>
-      <p class="text-gray-600">Добро пожаловать в систему управления расписанием!</p>
+    <div class="page-header">
+      <div>
+        <h1>Дашборд</h1>
+        <p class="text-gray-500 text-sm mt-0.5">Добро пожаловать в систему управления расписанием!</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span v-if="activeTerm" class="badge-blue text-sm">{{ activeTerm.name }}</span>
+        <button
+          v-if="authStore.user?.role === 'admin'"
+          @click="runSeed"
+          :disabled="seedLoading"
+          class="btn-secondary text-sm"
+          title="Загрузить тестовые данные ВКСИТ в базу"
+        >
+          <span v-if="seedLoading">Загрузка…</span>
+          <span v-else>Загрузить тест. данные</span>
+        </button>
+      </div>
+    </div>
+    <div v-if="seedMessage" :class="seedError ? 'alert-error' : 'alert-success'" class="mb-4">
+      {{ seedMessage }}
     </div>
 
-    <!-- Stats Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-      <!-- Active Term -->
-      <div class="bg-white overflow-hidden shadow rounded-lg">
-        <div class="p-5">
-          <div class="flex items-center">
-            <div class="flex-shrink-0">
-              <CalendarIcon class="h-6 w-6 text-gray-400" />
-            </div>
-            <div class="ml-5 w-0 flex-1">
-              <dl>
-                <dt class="text-sm font-medium text-gray-500 truncate">
-                  Активный семестр
-                </dt>
-                <dd class="text-lg font-medium text-gray-900">
-                  {{ activeTerm?.name || 'Не выбран' }}
-                </dd>
-              </dl>
-            </div>
-          </div>
+    <!-- Stats -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div class="stat-card">
+        <div class="stat-icon">
+          <CalendarDaysIcon class="w-6 h-6 text-gov-600" />
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 font-medium">Активный семестр</div>
+          <div class="text-lg font-bold text-gray-900 leading-tight">{{ activeTerm?.name || 'Не задан' }}</div>
         </div>
       </div>
-
-      <!-- Total Groups -->
-      <div class="bg-white overflow-hidden shadow rounded-lg">
-        <div class="p-5">
-          <div class="flex items-center">
-            <div class="flex-shrink-0">
-              <UsersIcon class="h-6 w-6 text-gray-400" />
-            </div>
-            <div class="ml-5 w-0 flex-1">
-              <dl>
-                <dt class="text-sm font-medium text-gray-500 truncate">
-                  Всего групп
-                </dt>
-                <dd class="text-lg font-medium text-gray-900">
-                  {{ stats.totalGroups || 0 }}
-                </dd>
-              </dl>
-            </div>
-          </div>
+      <div class="stat-card">
+        <div class="stat-icon">
+          <UsersIcon class="w-6 h-6 text-gov-600" />
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 font-medium">Всего групп</div>
+          <div class="text-3xl font-bold text-gray-900">{{ stats.totalGroups }}</div>
         </div>
       </div>
-
-      <!-- Total Teachers -->
-      <div class="bg-white overflow-hidden shadow rounded-lg">
-        <div class="p-5">
-          <div class="flex items-center">
-            <div class="flex-shrink-0">
-              <AcademicCapIcon class="h-6 w-6 text-gray-400" />
-            </div>
-            <div class="ml-5 w-0 flex-1">
-              <dl>
-                <dt class="text-sm font-medium text-gray-500 truncate">
-                  Преподавателей
-                </dt>
-                <dd class="text-lg font-medium text-gray-900">
-                  {{ stats.totalTeachers || 0 }}
-                </dd>
-              </dl>
-            </div>
-          </div>
+      <div class="stat-card">
+        <div class="stat-icon">
+          <AcademicCapIcon class="w-6 h-6 text-gov-600" />
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 font-medium">Преподавателей</div>
+          <div class="text-3xl font-bold text-gray-900">{{ stats.totalTeachers }}</div>
         </div>
       </div>
-
-      <!-- Lessons This Week -->
-      <div class="bg-white overflow-hidden shadow rounded-lg">
-        <div class="p-5">
-          <div class="flex items-center">
-            <div class="flex-shrink-0">
-              <ClockIcon class="h-6 w-6 text-gray-400" />
-            </div>
-            <div class="ml-5 w-0 flex-1">
-              <dl>
-                <dt class="text-sm font-medium text-gray-500 truncate">
-                  Пар на этой неделе
-                </dt>
-                <dd class="text-lg font-medium text-gray-900">
-                  {{ stats.lessonsThisWeek || 0 }}
-                </dd>
-              </dl>
-            </div>
-          </div>
+      <div class="stat-card">
+        <div class="stat-icon">
+          <ClockIcon class="w-6 h-6 text-gov-600" />
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 font-medium">Пар на этой неделе</div>
+          <div class="text-3xl font-bold text-gray-900">{{ stats.lessonsThisWeek }}</div>
         </div>
       </div>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <!-- Quick Actions -->
-      <div class="lg:col-span-1">
-        <div class="bg-white shadow rounded-lg">
-          <div class="px-4 py-5 sm:p-6">
-            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
-              Быстрые действия
-            </h3>
-            <div class="space-y-3">
-              <router-link
-                to="/schedule"
-                class="w-full btn-primary text-left inline-flex items-center"
-              >
-                <CalendarIcon class="h-5 w-5 mr-2" />
-                Просмотр расписания
-              </router-link>
-              
-              <router-link
-                v-if="authStore.isMethodist"
-                to="/generation"
-                class="w-full btn-secondary text-left inline-flex items-center"
-              >
-                <CogIcon class="h-5 w-5 mr-2" />
-                Генерация расписания
-              </router-link>
-              
-              <router-link
-                v-if="authStore.isMethodist"
-                to="/catalog/groups"
-                class="w-full btn-secondary text-left inline-flex items-center"
-              >
-                <UsersIcon class="h-5 w-5 mr-2" />
-                Управление группами
-              </router-link>
-              
-              <router-link
-                to="/reports"
-                class="w-full btn-secondary text-left inline-flex items-center"
-              >
-                <DocumentTextIcon class="h-5 w-5 mr-2" />
-                Отчеты
-              </router-link>
-            </div>
-          </div>
+      <div class="card card-body lg:col-span-1">
+        <h2 class="mb-4">Быстрые действия</h2>
+        <div class="space-y-2">
+          <router-link to="/schedule" class="btn-primary w-full flex items-center gap-2">
+            <CalendarDaysIcon class="w-4 h-4" />
+            Расписание
+          </router-link>
+          <router-link v-if="authStore.isMethodist" to="/generation" class="btn-secondary w-full flex items-center gap-2">
+            <CogIcon class="w-4 h-4" />
+            Генерация расписания
+          </router-link>
+          <router-link v-if="authStore.isMethodist" to="/catalog/groups" class="btn-secondary w-full flex items-center gap-2">
+            <UsersIcon class="w-4 h-4" />
+            Управление группами
+          </router-link>
+          <router-link to="/reports" class="btn-secondary w-full flex items-center gap-2">
+            <DocumentTextIcon class="w-4 h-4" />
+            Отчёты
+          </router-link>
+          <router-link to="/tg-admin" class="btn-secondary w-full flex items-center gap-2">
+            <ChatBubbleLeftIcon class="w-4 h-4" />
+            Telegram-диалоги
+          </router-link>
         </div>
       </div>
 
-      <!-- Recent Activity & Today's Schedule -->
-      <div class="lg:col-span-2 space-y-8">
-        <!-- Conflicts Alert -->
-        <div v-if="conflicts.length > 0" class="bg-yellow-50 border-l-4 border-yellow-400 p-4">
-          <div class="flex">
-            <div class="flex-shrink-0">
-              <ExclamationTriangleIcon class="h-5 w-5 text-yellow-400" />
-            </div>
-            <div class="ml-3">
-              <p class="text-sm text-yellow-700">
-                <strong>Внимание!</strong> Обнаружены конфликты в расписании.
-                <router-link to="/reports" class="underline font-medium">
-                  Просмотреть детали
-                </router-link>
-              </p>
-            </div>
+      <!-- Today & Conflicts -->
+      <div class="lg:col-span-2 space-y-4">
+        <!-- Conflicts alert -->
+        <div v-if="conflicts.length" class="alert-error flex items-start gap-3">
+          <ExclamationTriangleIcon class="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+          <div>
+            <span class="font-medium">Внимание!</span> Обнаружены конфликты в расписании.
+            <router-link to="/reports" class="underline font-medium ml-1">Подробнее</router-link>
           </div>
         </div>
 
-        <!-- Today's Schedule -->
-        <div class="bg-white shadow rounded-lg">
-          <div class="px-4 py-5 sm:p-6">
-            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
-              Расписание на сегодня
-            </h3>
-            
-            <div v-if="todayLessons.length === 0" class="text-gray-500 text-center py-8">
+        <!-- Today's lessons -->
+        <div class="card">
+          <div class="card-header">
+            <h2>Расписание на сегодня</h2>
+            <span class="text-xs text-gray-400">{{ todayFormatted }}</span>
+          </div>
+          <div class="card-body">
+            <div v-if="loading" class="text-center text-gray-400 py-6 text-sm">Загрузка…</div>
+            <div v-else-if="!todayLessons.length" class="text-center text-gray-400 py-6 text-sm">
               На сегодня занятий не запланировано
             </div>
-            
-            <div v-else class="space-y-3">
+            <div v-else class="space-y-2">
               <div
                 v-for="lesson in todayLessons"
                 :key="lesson.lesson_id"
-                class="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gov-50 transition-colors"
               >
-                <div class="flex items-center space-x-3">
-                  <div class="flex-shrink-0">
-                    <div
-                      :class="{
-                        'bg-blue-500': lesson.status === 'planned',
-                        'bg-green-500': lesson.status === 'confirmed',
-                        'bg-gray-500': lesson.status === 'completed',
-                        'bg-red-500': lesson.status === 'cancelled',
-                        'bg-yellow-500': lesson.status === 'moved'
-                      }"
-                      class="w-3 h-3 rounded-full"
-                    ></div>
-                  </div>
-                  <div>
-                    <div class="text-sm font-medium text-gray-900">
-                      {{ lesson.course_name || 'Предмет' }}
-                    </div>
-                    <div class="text-sm text-gray-500">
-                      {{ lesson.group_name || 'Группа' }} • 
-                      {{ lesson.teacher_name || 'Преподаватель' }} •
-                      {{ lesson.room_number || 'Аудитория не назначена' }}
-                    </div>
+                <div :class="{
+                  'bg-gov-500':   lesson.status === 'planned',
+                  'bg-green-500': lesson.status === 'confirmed',
+                  'bg-gray-400':  lesson.status === 'completed',
+                  'bg-red-500':   lesson.status === 'cancelled',
+                  'bg-amber-500': lesson.status === 'moved',
+                }" class="w-2 h-2 rounded-full shrink-0"></div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium text-gray-900 truncate">{{ lesson.course_name }}</div>
+                  <div class="text-xs text-gray-500 truncate">
+                    {{ lesson.group_name }} · {{ lesson.teacher_name }} · {{ lesson.room_number || 'Аудитория не указана' }}
                   </div>
                 </div>
-                <div class="text-sm text-gray-500">
-                  {{ lesson.start_time }} - {{ lesson.end_time }}
+                <div class="text-xs text-gray-500 whitespace-nowrap shrink-0">
+                  {{ fmtTime(lesson.start_time) }} – {{ fmtTime(lesson.end_time) }}
                 </div>
               </div>
             </div>
-            
-            <div class="mt-4">
-              <router-link 
-                to="/schedule"
-                class="text-sm text-blue-600 hover:text-blue-500 font-medium"
-              >
-                Посмотреть полное расписание →
-              </router-link>
-            </div>
+            <router-link to="/schedule" class="block mt-3 text-sm text-gov-600 hover:text-gov-700 font-medium">
+              Посмотреть полное расписание →
+            </router-link>
           </div>
         </div>
       </div>
@@ -223,190 +150,121 @@
 
 <script>
 import { ref, onMounted, computed } from 'vue'
-import { 
-  CalendarIcon, 
-  UsersIcon, 
-  AcademicCapIcon, 
-  ClockIcon,
-  CogIcon,
-  DocumentTextIcon,
-  ExclamationTriangleIcon
+import {
+  CalendarDaysIcon, UsersIcon, AcademicCapIcon, ClockIcon,
+  CogIcon, DocumentTextIcon, ExclamationTriangleIcon, ChatBubbleLeftIcon,
 } from '@heroicons/vue/24/outline'
 import { useAuthStore } from '@/stores/auth'
-import { lessonsAPI, catalogAPI, reportsAPI } from '@/services/api'
-import { format, startOfWeek, endOfWeek, parseISO } from 'date-fns'
+import { lessonsAPI, catalogAPI, reportsAPI, adminAPI } from '@/services/api'
+import { format, startOfWeek, endOfWeek } from 'date-fns'
+import { ru } from 'date-fns/locale'
 
 export default {
   name: 'Dashboard',
   components: {
-    CalendarIcon,
-    UsersIcon,
-    AcademicCapIcon,
-    ClockIcon,
-    CogIcon,
-    DocumentTextIcon,
-    ExclamationTriangleIcon
+    CalendarDaysIcon, UsersIcon, AcademicCapIcon, ClockIcon,
+    CogIcon, DocumentTextIcon, ExclamationTriangleIcon, ChatBubbleLeftIcon,
   },
   setup() {
     const authStore = useAuthStore()
-    
-    const loading = ref(false)
-    const stats = ref({
-      totalGroups: 0,
-      totalTeachers: 0,
-      lessonsThisWeek: 0
-    })
-    const activeTerm = ref(null)
+    const loading   = ref(false)
+    const stats     = ref({ totalGroups: 0, totalTeachers: 0, lessonsThisWeek: 0 })
+    const activeTerm  = ref(null)
     const todayLessons = ref([])
-    const conflicts = ref([])
+    const conflicts    = ref([])
+    const seedLoading = ref(false)
+    const seedMessage = ref('')
+    const seedError   = ref(false)
 
     const today = computed(() => format(new Date(), 'yyyy-MM-dd'))
+    const todayFormatted = computed(() =>
+      format(new Date(), 'd MMMM yyyy, EEEE', { locale: ru })
+    )
 
-    const formatTimeSlot = (timeSlot) => {
-      if (!timeSlot) return ''
-      return `${timeSlot.start_time} - ${timeSlot.end_time}`
+    const fmtTime = (t) => {
+      if (!t) return ''
+      // Backend returns "HH:MM:SS" — show only "HH:MM"
+      return String(t).slice(0, 5)
     }
 
     const loadDashboardData = async () => {
       loading.value = true
-      
       try {
-        // Load today's lessons
+        // Today's lessons
         try {
-          const lessonsResponse = await lessonsAPI.getByDay(today.value)
-          todayLessons.value = lessonsResponse.data || lessonsResponse || []
-        } catch (error) {
-          console.warn('Could not load today lessons:', error)
-          todayLessons.value = []
-        }
+          const res = await lessonsAPI.getByDay(today.value)
+          todayLessons.value = res.data || []
+        } catch {}
 
-        // Load basic stats (simplified)
+        // Groups & teachers counts
         try {
-          const groupsResponse = await catalogAPI.getGroups({ limit: 1000 })
-          const groupsData = groupsResponse.data || groupsResponse
-          stats.value.totalGroups = Array.isArray(groupsData) ? groupsData.length : 0
-          console.log('Groups loaded:', groupsData)
-        } catch (error) {
-          console.warn('Could not load groups count:', error)
-          stats.value.totalGroups = 0
-        }
+          const [gRes, tRes] = await Promise.all([
+            catalogAPI.getGroups({ limit: 1000 }),
+            catalogAPI.getTeachers({ limit: 1000 }),
+          ])
+          stats.value.totalGroups   = (gRes.data || []).length
+          stats.value.totalTeachers = (tRes.data || []).length
+        } catch {}
 
+        // Active term
         try {
-          const teachersResponse = await catalogAPI.getTeachers({ limit: 1000 })
-          const teachersData = teachersResponse.data || teachersResponse
-          stats.value.totalTeachers = Array.isArray(teachersData) ? teachersData.length : 0
-          console.log('Teachers loaded:', teachersData)
-        } catch (error) {
-          console.warn('Could not load teachers count:', error)
-          stats.value.totalTeachers = 0
-        }
+          const tRes = await catalogAPI.getTerms({ limit: 100 })
+          const terms = tRes.data || []
+          const now = new Date()
+          now.setHours(0, 0, 0, 0)
+          activeTerm.value =
+            terms.find(t => {
+              const s = new Date(t.start_date)
+              const e = new Date(t.end_date)
+              return now >= s && now <= e
+            }) ||
+            (terms.length ? [...terms].sort((a, b) => new Date(b.start_date) - new Date(a.start_date))[0] : null)
+        } catch {}
 
-        // Load active term (term that covers today)
-        try {
-          const termsResponse = await catalogAPI.getTerms({ limit: 100 })
-          console.log('Terms response:', termsResponse)
-          const terms = Array.isArray(termsResponse.data) ? termsResponse.data : (Array.isArray(termsResponse) ? termsResponse : [])
-          console.log('Terms array:', terms)
-          
-          if (terms.length === 0) {
-            console.warn('No terms found')
-            activeTerm.value = null
-          } else {
-            const todayDate = new Date()
-            todayDate.setHours(0, 0, 0, 0) // Reset time to compare dates only
-            
-            // Find term that covers today
-            const currentTerm = terms.find(term => {
-              if (!term.start_date || !term.end_date) return false
-              const startDate = new Date(term.start_date)
-              const endDate = new Date(term.end_date)
-              startDate.setHours(0, 0, 0, 0)
-              endDate.setHours(0, 0, 0, 0)
-              return todayDate >= startDate && todayDate <= endDate
-            })
-            
-            console.log('Current term found:', currentTerm)
-            
-            // If no term covers today, find the most recent term
-            if (!currentTerm && terms.length > 0) {
-              const sortedTerms = terms.sort((a, b) => {
-                const dateA = new Date(a.start_date || 0)
-                const dateB = new Date(b.start_date || 0)
-                return dateB - dateA
-              })
-              activeTerm.value = sortedTerms[0]
-              console.log('Using most recent term:', activeTerm.value)
-            } else {
-              activeTerm.value = currentTerm || null
-            }
-          }
-        } catch (error) {
-          console.error('Error loading active term:', error)
-          activeTerm.value = null
-        }
-
-        // Load lessons for this week
+        // Lessons this week
         try {
           const now = new Date()
-          const weekStart = startOfWeek(now, { weekStartsOn: 1 })
-          const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
-          
-          const startDateStr = format(weekStart, 'yyyy-MM-dd')
-          const endDateStr = format(weekEnd, 'yyyy-MM-dd')
-          
-          console.log('Loading lessons for week:', startDateStr, 'to', endDateStr)
-          
-          const lessonsResponse = await lessonsAPI.getByTerm({
-            start_date: startDateStr,
-            end_date: endDateStr,
-            org_id: authStore.user?.org_id || 1
-          })
-          
-          console.log('Lessons response:', lessonsResponse)
-          
-          const weekLessons = Array.isArray(lessonsResponse.data) 
-            ? lessonsResponse.data 
-            : (Array.isArray(lessonsResponse) ? lessonsResponse : [])
-          
-          stats.value.lessonsThisWeek = weekLessons.length
-          console.log('Lessons this week loaded:', stats.value.lessonsThisWeek, 'lessons')
-        } catch (error) {
-          console.error('Error loading lessons for week:', error)
-          stats.value.lessonsThisWeek = 0
-        }
+          const weekStart = format(startOfWeek(now, { weekStartsOn: 1 }), 'yyyy-MM-dd')
+          const weekEnd   = format(endOfWeek(now,   { weekStartsOn: 1 }), 'yyyy-MM-dd')
+          const wRes = await lessonsAPI.getByTerm({ start_date: weekStart, end_date: weekEnd })
+          stats.value.lessonsThisWeek = (wRes.data || []).length
+        } catch {}
 
-        // Load conflicts (simplified)
+        // Conflicts
         try {
-          const conflictsResponse = await reportsAPI.getConflicts({
-            org_id: authStore.user?.org_id || 1
-          })
-          conflicts.value = conflictsResponse.data || []
-        } catch (error) {
-          console.warn('Could not load conflicts:', error)
-          conflicts.value = []
-        }
+          const cRes = await reportsAPI.getConflicts({})
+          conflicts.value = cRes.data?.conflicts || []
+        } catch {}
 
-      } catch (error) {
-        console.error('Error loading dashboard data:', error)
       } finally {
         loading.value = false
       }
     }
 
-    onMounted(() => {
-      loadDashboardData()
-    })
+    const runSeed = async () => {
+      seedLoading.value = true
+      seedMessage.value = ''
+      seedError.value = false
+      try {
+        const res = await adminAPI.seed()
+        seedMessage.value = res.data?.detail || 'Тестовые данные успешно загружены!'
+        await loadDashboardData()
+      } catch (e) {
+        seedError.value = true
+        seedMessage.value = e.response?.data?.error?.message || e.response?.data?.detail || 'Ошибка загрузки данных'
+      } finally {
+        seedLoading.value = false
+        setTimeout(() => { seedMessage.value = '' }, 6000)
+      }
+    }
+
+    onMounted(loadDashboardData)
 
     return {
-      authStore,
-      loading,
-      stats,
-      activeTerm,
-      todayLessons,
-      conflicts,
-      today,
-      formatTimeSlot
+      authStore, loading, stats, activeTerm, todayLessons, conflicts,
+      today, todayFormatted, fmtTime,
+      seedLoading, seedMessage, seedError, runSeed,
     }
-  }
+  },
 }
 </script>

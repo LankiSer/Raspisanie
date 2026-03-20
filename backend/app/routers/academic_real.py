@@ -23,7 +23,6 @@ class AcademicYearResponse(BaseModel):
     end_date: date
 
 class AcademicYearCreate(BaseModel):
-    org_id: int
     name: str
     start_date: date
     end_date: date
@@ -69,7 +68,7 @@ async def create_academic_year(
     # Check if academic year with same name already exists
     existing_year = await db.execute(
         select(AcademicYear).where(
-            AcademicYear.org_id == year.org_id,
+            AcademicYear.org_id == current_user.org_id,
             AcademicYear.name == year.name
         )
     )
@@ -80,7 +79,7 @@ async def create_academic_year(
         )
     
     new_year = AcademicYear(
-        org_id=year.org_id,
+        org_id=current_user.org_id,
         name=year.name,
         start_date=year.start_date,
         end_date=year.end_date
@@ -165,7 +164,6 @@ class TermResponse(BaseModel):
     end_date: date
 
 class TermCreate(BaseModel):
-    org_id: int
     academic_year_id: int
     name: str
     start_date: date
@@ -217,7 +215,7 @@ async def create_term(
 ):
     """Create a new term."""
     new_term = Term(
-        org_id=term.org_id,
+        org_id=current_user.org_id,
         academic_year_id=term.academic_year_id,
         name=term.name,
         start_date=term.start_date,

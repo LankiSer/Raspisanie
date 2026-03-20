@@ -38,7 +38,7 @@
       <button
         v-if="['planned', 'confirmed'].includes(lesson?.status)"
         @click="handleStatusChange('completed')"
-        class="block w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+        class="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
       >
         <CheckIcon class="inline h-4 w-4 mr-2" />
         Отметить завершенным
@@ -106,7 +106,7 @@ export default {
       default: null
     }
   },
-  emits: ['close', 'edit', 'move', 'cancel', 'delete'],
+  emits: ['close', 'edit', 'move', 'cancel', 'delete', 'status-changed'],
   setup(props, { emit }) {
     const handleStatusChange = async (newStatus) => {
       if (!props.lesson) return
@@ -116,12 +116,11 @@ export default {
           status: newStatus,
           version: props.lesson.version
         })
-        
+        // Emit status-changed so parent Schedule refreshes the grid
+        emit('status-changed')
         emit('close')
-        // Optionally emit a refresh event
       } catch (error) {
         console.error('Error updating lesson status:', error)
-        // Show error message
       }
     }
 

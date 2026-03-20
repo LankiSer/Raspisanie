@@ -1,23 +1,193 @@
 """Schedule generation router."""
 
+import asyncio
 import logging
 import random
-from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from datetime import date, timedelta
+import time
+import uuid
+from datetime import date, timedelta, time as dt_time
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
 from app.core.auth import get_current_active_user_or_demo
+from app.core.database import AsyncSessionLocal, get_db
+from app.models.academic import AcademicYear, Term
+from app.models.educational import (
+    Course, CourseAssignment, Enrollment, Group, Teacher,
+)
+from app.models.facilities import Room, TeacherAvailability, TimeTableSlot
 from app.models.scheduling import LessonInstance, LessonStatus
-from app.models.educational import Enrollment, Group, Teacher, Course, CourseAssignment
-from app.models.facilities import Room, TimeTableSlot
-from app.models.academic import Term, AcademicYear
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# ── In-process job store (preview + run) ─────────────────────────────────────
+# Suitable for single-worker deployments; swap for Redis for multi-worker.
+_jobs: Dict[str, Dict[str, Any]] = {}
+_JOB_TTL_SECONDS = 3600  # clean up after 1 h
+
+
+def _new_job() -> tuple[str, dict]:
+    job_id = str(uuid.uuid4())
+    job: Dict[str, Any] = {"status": "running", "result": None, "error": None, "created_at": time.monotonic()}
+    _jobs[job_id] = job
+    return job_id, job
+
+
+def _purge_old_jobs() -> None:
+    cutoff = time.monotonic() - _JOB_TTL_SECONDS
+    stale = [jid for jid, j in _jobs.items() if j.get("created_at", 0) < cutoff]
+    for jid in stale:
+        _jobs.pop(jid, None)
+
+
+class _FakeUser:
+    """Minimal user-like object carrying org_id and user_id for background tasks."""
+    def __init__(self, org_id: int, user_id: int):
+        self.org_id  = org_id
+        self.user_id = user_id
+
+
+async def _run_bg_preview(job_id: str, request: "GenerationRequest", org_id: int) -> None:
+    """Background coroutine: compute preview and store result."""
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await _preview_generation_internal(request, db, _FakeUser(org_id, 0))
+        _jobs[job_id].update(
+            status="done",
+            result=result.model_dump() if hasattr(result, "model_dump") else dict(result),
+        )
+    except Exception as exc:
+        logger.exception("Preview job %s failed: %s", job_id, exc)
+        _jobs[job_id].update(status="error", error=str(exc))
+
+
+async def _run_bg_save(job_id: str, request: "GenerationRequest", org_id: int, user_id: int) -> None:
+    """Background coroutine: generate + save lessons, store result."""
+    from sqlalchemy import select, delete as sa_delete
+
+    try:
+        async with AsyncSessionLocal() as db:
+            fake_user = _FakeUser(org_id, user_id)
+
+            # ── Find or create term ───────────────────────────────────────
+            term = None
+            if request.term_id:
+                r = await db.execute(
+                    select(Term).where(Term.term_id == request.term_id, Term.org_id == org_id).limit(1)
+                )
+                term = r.scalars().first()
+
+            if not term:
+                for clauses in [
+                    [Term.start_date <= request.from_date, Term.end_date >= request.to_date],
+                    [Term.start_date <= request.from_date, Term.end_date >= request.from_date],
+                    [Term.start_date <= request.to_date,   Term.end_date >= request.to_date],
+                    [Term.start_date <= request.to_date,   Term.end_date >= request.from_date],
+                ]:
+                    r = await db.execute(
+                        select(Term).where(Term.org_id == org_id, *clauses)
+                        .order_by(Term.start_date.desc()).limit(1)
+                    )
+                    term = r.scalars().first()
+                    if term:
+                        break
+
+            if not term:
+                # Auto-create academic year + term
+                r = await db.execute(
+                    select(AcademicYear).where(
+                        AcademicYear.org_id == org_id,
+                        AcademicYear.start_date <= request.from_date,
+                        AcademicYear.end_date   >= request.to_date,
+                    ).order_by(AcademicYear.start_date.desc()).limit(1)
+                )
+                academic_year = r.scalars().first()
+
+                if not academic_year:
+                    ys = request.from_date.year
+                    ye = request.to_date.year
+                    ay_name = f"{ys}-{ye}" if ys != ye else f"{ys}-{ys + 1}"
+                    ay_start = date(ys, 9, 1) if request.from_date.month >= 9 else date(ys - 1, 9, 1)
+                    ay_end   = date(ys + 1, 6, 30) if request.from_date.month >= 9 else date(ys, 6, 30)
+                    academic_year = AcademicYear(org_id=org_id, name=ay_name, start_date=ay_start, end_date=ay_end)
+                    db.add(academic_year)
+                    await db.flush()
+
+                term = Term(
+                    org_id=org_id,
+                    academic_year_id=academic_year.id,
+                    name=f"Семестр {request.from_date} — {request.to_date}",
+                    start_date=request.from_date,
+                    end_date=request.to_date,
+                )
+                db.add(term)
+                await db.flush()
+
+            # Stretch term to cover the full requested range
+            if term.start_date > request.from_date or term.end_date < request.to_date:
+                term.start_date = min(term.start_date, request.from_date)
+                term.end_date   = max(term.end_date,   request.to_date)
+                await db.flush()
+
+            # ── Generate proposals ────────────────────────────────────────
+            preview_result = await _preview_generation_internal(request, db, fake_user)
+            if not preview_result.success or not preview_result.proposals:
+                _jobs[job_id].update(status="error", error="Генерация не дала результатов. Проверьте данные (группы, аудитории, слоты, записи).")
+                return
+
+            # Stretch term again after we know the actual proposal dates
+            if preview_result.proposals:
+                p_dates = [p.date for p in preview_result.proposals]
+                term.start_date = min(term.start_date, min(p_dates))
+                term.end_date   = max(term.end_date,   max(p_dates))
+                await db.flush()
+
+            # ── Clear existing lessons for date range ─────────────────────
+            await db.execute(
+                sa_delete(LessonInstance).where(
+                    LessonInstance.org_id == org_id,
+                    LessonInstance.date   >= request.from_date,
+                    LessonInstance.date   <= request.to_date,
+                )
+            )
+
+            # ── Save new lessons ──────────────────────────────────────────
+            for proposal in preview_result.proposals:
+                db.add(LessonInstance(
+                    org_id=org_id,
+                    term_id=term.term_id,
+                    date=proposal.date,
+                    slot_id=proposal.slot_id,
+                    room_id=proposal.room_id,
+                    enrollment_id=proposal.enrollment_id,
+                    status=LessonStatus.CONFIRMED,
+                    created_by=user_id,
+                ))
+
+            await db.commit()
+
+            created = len(preview_result.proposals)
+            logger.info("Run job %s done: %d lessons saved (term_id=%s)", job_id, created, term.term_id)
+            _jobs[job_id].update(
+                status="done",
+                result={
+                    "success": True,
+                    "message": f"Генерация завершена! Создано {created} занятий.",
+                    "created_lessons":   created,
+                    "total_blocks":      len(preview_result.blocks),
+                    "total_proposals":   len(preview_result.proposals),
+                    "stats":             preview_result.stats,
+                },
+            )
+
+    except Exception as exc:
+        logger.exception("Run job %s failed: %s", job_id, exc)
+        _jobs[job_id].update(status="error", error=str(exc))
 
 # Simple request/response models for demo
 class GenerationRuleset(BaseModel):
@@ -52,6 +222,7 @@ class LessonBlock(BaseModel):
     date: date
     start_slot_id: int
     end_slot_id: int
+    slot_ids: List[int] = Field(default_factory=list)  # все slot_id блока
     room_id: int
     enrollment_id: int
     group_id: int
@@ -73,6 +244,120 @@ class GenerationResult(BaseModel):
     success: bool = True
 
 
+def _dedupe_and_filter_slots(slots: list) -> list:
+    """Убрать дубликаты по (start,end) и слоты вне учебного дня (мусор в БД)."""
+    if not slots:
+        return []
+    out: list = []
+    seen: set = set()
+    for s in sorted(slots, key=lambda x: (x.start_time, x.end_time, x.slot_id)):
+        try:
+            st = s.start_time
+            et = s.end_time
+        except Exception:
+            continue
+        if st < dt_time(6, 0) or st > dt_time(23, 0):
+            continue
+        key = (st, et)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
+
+
+def _weekdays_left_same_iso_week(day: date, range_end: date) -> int:
+    """Сколько рабочих дней (пн–пт) осталось в той же ISO-неделе, начиная с day."""
+    y, w, _ = day.isocalendar()
+    cnt = 0
+    cur = day
+    while cur <= range_end:
+        if cur.weekday() < 5 and cur.isocalendar()[:2] == (y, w):
+            cnt += 1
+        cur += timedelta(days=1)
+    return max(1, cnt)
+
+
+def _count_weekdays_in_range(from_d: date, to_d: date) -> int:
+    n = 0
+    cur = from_d
+    while cur <= to_d:
+        if cur.weekday() < 5:
+            n += 1
+        cur += timedelta(days=1)
+    return max(1, n)
+
+
+def _compute_lessons_per_week(enrollments: list) -> Dict[int, int]:
+    out: Dict[int, int] = {}
+    for enrollment in enrollments:
+        unit = getattr(enrollment, "unit", "per_semester") or "per_semester"
+        if unit == "per_week":
+            weekly_hours = float(enrollment.planned_hours)
+        else:
+            weekly_hours = float(enrollment.planned_hours) / 18.0
+        lpw = min(6, max(1, round(weekly_hours / 1.5)))
+        out[enrollment.enrollment_id] = lpw
+    return out
+
+
+def _build_avail_by_teacher(rows: List[TeacherAvailability]) -> Dict[int, List[TeacherAvailability]]:
+    m: Dict[int, List[TeacherAvailability]] = {}
+    for a in rows:
+        m.setdefault(a.teacher_id, []).append(a)
+    return m
+
+
+def _teacher_already_booked(
+    teacher_id: int,
+    day: date,
+    slot_ids: set,
+    proposals: list,
+    enrollments_list: list,
+    assignments_dict: dict,
+) -> bool:
+    """Преподаватель уже ведёт другую пару в эти слоты в этот день."""
+    enr_by_id = {e.enrollment_id: e for e in enrollments_list}
+    for p in proposals:
+        if p.date != day or p.slot_id not in slot_ids:
+            continue
+        enr = enr_by_id.get(p.enrollment_id)
+        if not enr:
+            continue
+        asgn = assignments_dict.get(enr.assignment_id)
+        if asgn and asgn.teacher_id == teacher_id:
+            return True
+    return False
+
+
+def _teacher_slots_allowed(
+    teacher_id: int,
+    day: date,
+    slot_objs: list,
+    avail_by_teacher: Dict[int, List[TeacherAvailability]],
+    respect: bool,
+) -> bool:
+    """Пара(ы) попадают в окна доступности преподавателя (пн–вс = 1–7)."""
+    if not respect:
+        return True
+    rows = avail_by_teacher.get(teacher_id, [])
+    if not rows:
+        return True
+    wd = day.weekday() + 1  # SQL model: 1=Monday .. 7=Sunday
+    for slot in slot_objs:
+        st, et = slot.start_time, slot.end_time
+        for a in rows:
+            if a.weekday != wd or a.is_available:
+                continue
+            if not (et <= a.start_time or st >= a.end_time):
+                return False
+        positive = [a for a in rows if a.weekday == wd and a.is_available]
+        if positive:
+            if not any(a.start_time <= st and a.end_time >= et for a in positive):
+                return False
+    return True
+
+
 async def _preview_generation_internal(
     request: GenerationRequest,
     db: AsyncSession,
@@ -92,9 +377,17 @@ async def _preview_generation_internal(
     rooms_result = await db.execute(select(Room).where(Room.org_id == current_user.org_id))
     rooms = rooms_result.scalars().all()
     
-    slots_result = await db.execute(select(TimeTableSlot).where(TimeTableSlot.org_id == current_user.org_id))
-    slots = slots_result.scalars().all()
-    
+    slots_result = await db.execute(
+        select(TimeTableSlot)
+        .where(TimeTableSlot.org_id == current_user.org_id)
+        .order_by(TimeTableSlot.start_time)
+    )
+    slots = _dedupe_and_filter_slots(list(slots_result.scalars().all()))
+    if not slots:
+        return GenerationResult(
+            proposals=[], blocks=[], stats={}, conflicts=["Нет корректных временных слотов (06:00–23:00)"], success=False
+        )
+
     enrollments_result = await db.execute(select(Enrollment).where(Enrollment.org_id == current_user.org_id))
     enrollments = enrollments_result.scalars().all()
     
@@ -117,31 +410,88 @@ async def _preview_generation_internal(
     courses_result = await db.execute(select(Course).where(Course.course_id.in_(course_ids)))
     courses = courses_result.scalars().all()
     courses_dict = {c.course_id: c for c in courses}
+
+    av_res = await db.execute(
+        select(TeacherAvailability).where(TeacherAvailability.org_id == current_user.org_id)
+    )
+    avail_by_teacher = _build_avail_by_teacher(list(av_res.scalars().all()))
+
+    lessons_per_week_per_enrollment = _compute_lessons_per_week(list(enrollments))
+    group_enrollments: Dict[int, List] = {}
+    for enrollment in enrollments:
+        group_enrollments.setdefault(enrollment.group_id, []).append(enrollment)
+    weekly_target = {
+        gid: sum(lessons_per_week_per_enrollment[e.enrollment_id] for e in elist)
+        for gid, elist in group_enrollments.items()
+    }
+    n_wd = _count_weekdays_in_range(request.from_date, request.to_date)
+    weeks_equiv = max(1.0, n_wd / 5.0)
+    target_floor = max(15, int(sum(weekly_target.values()) * weeks_equiv * 0.3))
+    
+    # ---------------------------------------------------------------
+    # OR-Tools CP-SAT (если результат слишком «пустой» — берём эвристику)
+    # ---------------------------------------------------------------
+    import asyncio
+
+    def _build_dates(from_d, to_d):
+        dates_out = []
+        cur = from_d
+        while cur <= to_d:
+            if cur.weekday() < 5:
+                dates_out.append(cur)
+            cur += timedelta(days=1)
+        return dates_out
+
+    dates_for_ortools = _build_dates(request.from_date, request.to_date)
+
+    loop = asyncio.get_event_loop()
+    ortools_proposals = await loop.run_in_executor(
+        None,
+        _ortools_generate,
+        list(groups), list(teachers_dict.values()), list(rooms), list(slots),
+        list(enrollments), assignments_dict, courses_dict,
+        dates_for_ortools, request.ruleset, 25.0, avail_by_teacher,
+    )
+
+    if ortools_proposals and len(ortools_proposals) < target_floor:
+        logger.info(
+            "OR-Tools дал мало занятий (%s < %s), переключаемся на эвристику",
+            len(ortools_proposals), target_floor,
+        )
+        ortools_proposals = []
+
+    if ortools_proposals:
+        logger.info("OR-Tools generated %s lessons", len(ortools_proposals))
+        stats = {
+            "total_lessons": len(ortools_proposals),
+            "total_blocks": 0,
+            "groups_count": len(groups),
+            "teachers_count": len(teachers),
+            "rooms_count": len(rooms),
+            "time_slots_count": len(slots),
+            "enrollments_count": len(enrollments),
+            "date_range": f"{request.from_date} - {request.to_date}",
+            "generation_method": "OR-Tools CP-SAT",
+            "block_scheduling_enabled": False,
+        }
+        return GenerationResult(proposals=ortools_proposals, blocks=[], stats=stats, success=True)
+
+    # ---------------------------------------------------------------
+    # Heuristic fallback
+    # ---------------------------------------------------------------
+    logger.info("Falling back to heuristic block scheduler")
     
     # Generate lessons and blocks
     proposals = []
     blocks = []
     
-    # Calculate lessons per week for each enrollment
-    lessons_per_week_per_enrollment = {}
-    for enrollment in enrollments:
-        # Calculate how many lessons per week based on planned hours
-        # Each lesson is 1.5 hours (90 minutes), 18 weeks per semester
-        weekly_hours = enrollment.planned_hours / 18
-        lessons_per_week = min(4, max(1, int(weekly_hours / 1.5)))  # 1-4 lessons per week (realistic)
-        lessons_per_week_per_enrollment[enrollment.enrollment_id] = lessons_per_week
-    
-    # Group enrollments by group to ensure each group gets lessons
-    group_enrollments = {}
-    for enrollment in enrollments:
-        if enrollment.group_id not in group_enrollments:
-            group_enrollments[enrollment.group_id] = []
-        group_enrollments[enrollment.group_id].append(enrollment)
-    
     # Shuffle enrollments within each group to randomize course order
     # This ensures different courses appear in different orders across groups
     for group_id in group_enrollments:
         random.shuffle(group_enrollments[group_id])
+
+    # Сколько уже поставлено в текущей ISO-неделе: (год, номер_недели, group_id) → int
+    placed_iso_week: Dict[tuple, int] = {}
     
     # Generate lessons for each day
     # Ensure from_date and to_date are valid date objects
@@ -161,27 +511,27 @@ async def _preview_generation_internal(
                     continue
                 
                 # Get generation type for this group (2, 3, or 5 lessons per block)
-                block_size = group.generation_type
+                block_size = max(1, int(group.generation_type or 2))
+                max_blocks = request.ruleset.max_blocks_per_day
                 
-                # Calculate total lessons for this group this week
-                total_group_lessons = sum(lessons_per_week_per_enrollment[e.enrollment_id] for e in group_enrollments_list)
-                
-                # Distribute lessons across weekdays (Monday=0 to Friday=4)
-                weekday = current_date.weekday()
-                lessons_this_day = 0
-                
-                # Calculate how many lessons this group should have today
-                # All groups can have lessons every day since we have enough resources
-                if total_group_lessons > 0:
-                    # Use the group's generation_type as block size for block scheduling
-                    lessons_this_day = block_size
-                else:
+                total_group_lessons = weekly_target.get(group_id, 0)
+                iso = current_date.isocalendar()
+                wk_key = (iso[0], iso[1], group_id)
+                already = placed_iso_week.get(wk_key, 0)
+                remaining_week = max(0, total_group_lessons - already)
+                days_left = _weekdays_left_same_iso_week(current_date, request.to_date)
+
+                if remaining_week <= 0:
                     lessons_this_day = 0
+                else:
+                    # Равномерно добираем оставшиеся пары по рабочим дням недели
+                    per_day = max(1, (remaining_week + days_left - 1) // days_left)
+                    cap = block_size * max_blocks
+                    lessons_this_day = min(cap, per_day, remaining_week)
                 
                 # Generate blocks for this day
                 lessons_given = 0
                 block_count = 0
-                max_blocks = request.ruleset.max_blocks_per_day
                 
                 # Distribute groups across time slots and rooms to avoid conflicts
                 # Each group gets a different starting slot and room
@@ -206,16 +556,16 @@ async def _preview_generation_internal(
                     )
                     
                     if available_slots:
-                        start_slot = available_slots[0]
-                        end_slot = available_slots[-1]
-                        
                         # Find available room starting from group's assigned room
                         available_room = _find_available_room_for_group(
-                            rooms, start_slot, end_slot, group_room_offset,
+                            rooms, available_slots, group_room_offset,
                             current_date, proposals, blocks
                         )
                         
                         if available_room:
+                            if not group_enrollments_list:
+                                block_count += 1
+                                continue
                             # Choose one enrollment for this block with smart randomization
                             # Goal: avoid same course in consecutive blocks
                             if group_enrollments_list:
@@ -272,6 +622,26 @@ async def _preview_generation_internal(
                                     course = courses_dict.get(assignment.course_id)
                                     
                                     if teacher and course:
+                                        if not _teacher_slots_allowed(
+                                            assignment.teacher_id,
+                                            current_date,
+                                            available_slots,
+                                            avail_by_teacher,
+                                            request.ruleset.respect_availability,
+                                        ):
+                                            block_count += 1
+                                            continue
+                                        sid_set = {s.slot_id for s in available_slots}
+                                        if _teacher_already_booked(
+                                            assignment.teacher_id,
+                                            current_date,
+                                            sid_set,
+                                            proposals,
+                                            list(enrollments),
+                                            assignments_dict,
+                                        ):
+                                            block_count += 1
+                                            continue
                                         # Create individual lessons for the block
                                         for i, slot in enumerate(available_slots):
                                             proposal = GeneratedLesson(
@@ -289,11 +659,14 @@ async def _preview_generation_internal(
                                             )
                                             proposals.append(proposal)
                                         
-                                        # Create block representation
+                                        # Create block representation using first/last slots of the block
+                                        block_start_slot = available_slots[0]
+                                        block_end_slot = available_slots[-1]
                                         block = LessonBlock(
                                             date=current_date,
-                                            start_slot_id=start_slot.slot_id,
-                                            end_slot_id=end_slot.slot_id,
+                                            start_slot_id=block_start_slot.slot_id,
+                                            end_slot_id=block_end_slot.slot_id,
+                                            slot_ids=[s.slot_id for s in available_slots],
                                             room_id=available_room.room_id,
                                             enrollment_id=enrollment.enrollment_id,
                                             group_id=group_id,
@@ -303,8 +676,8 @@ async def _preview_generation_internal(
                                             teacher_name=f"{teacher.first_name} {teacher.last_name}",
                                             course_name=course.name,
                                             room_number=available_room.number,
-                                            start_time=str(start_slot.start_time),
-                                            end_time=str(end_slot.end_time),
+                                            start_time=str(block_start_slot.start_time),
+                                            end_time=str(block_end_slot.end_time),
                                             block_size=current_block_size
                                         )
                                         blocks.append(block)
@@ -316,6 +689,9 @@ async def _preview_generation_internal(
                             break  # No available room, stop trying
                     else:
                         break  # No available slots, stop trying
+
+                if lessons_given:
+                    placed_iso_week[wk_key] = placed_iso_week.get(wk_key, 0) + lessons_given
         
         # Use timedelta to safely add one day (handles month/year boundaries correctly)
         try:
@@ -435,23 +811,20 @@ def _find_consecutive_slots_for_group(
     return []
 
 def _find_available_room_for_group(
-    rooms, start_slot, end_slot, group_room_offset, 
+    rooms, actual_slots, group_room_offset,
     current_date, proposals, blocks
 ):
     """Find available room for a group starting from its assigned room offset."""
     if not rooms:
         return None
     
-    # Sort rooms by room_id for consistent ordering
     sorted_rooms = sorted(rooms, key=lambda r: r.room_id)
     
-    # Try rooms starting from the group's assigned room
     for offset in range(len(sorted_rooms)):
         room_index = (group_room_offset + offset) % len(sorted_rooms)
         room = sorted_rooms[room_index]
         
-        # Check if this room is available for the entire time range
-        if _room_available_for_slots(room, start_slot, end_slot, current_date, proposals, blocks):
+        if _room_available_for_slots(room, actual_slots, current_date, proposals):
             return room
     
     return None
@@ -477,443 +850,274 @@ def _are_consecutive_slots(slots):
 
 def _slots_conflict(slots, current_date, proposals, blocks, group_id):
     """Check if slots conflict with existing lessons."""
-    slot_ids = [s.slot_id for s in slots]
-    
-    # Check conflicts in individual proposals
+    want = {s.slot_id for s in slots}
+
     for proposal in proposals:
-        if (proposal.date == current_date and 
-            proposal.slot_id in slot_ids):
+        if proposal.date == current_date and proposal.slot_id in want:
             return True
-    
-    # Check conflicts in blocks
+
     for block in blocks:
-        if (block.date == current_date and 
-            block.group_id == group_id and
-            any(slot_id in slot_ids for slot_id in range(block.start_slot_id, block.end_slot_id + 1))):
+        if block.date != current_date or block.group_id != group_id:
+            continue
+        occupied = set(block.slot_ids) if block.slot_ids else {block.start_slot_id, block.end_slot_id}
+        if want & occupied:
             return True
-    
+
     return False
 
 
 def _slots_conflict_for_group(slots, current_date, proposals, blocks, group_id):
-    """Check if slots conflict with existing lessons for a specific group."""
-    slot_ids = [s.slot_id for s in slots]
+    """Check if slots conflict with existing lessons for a specific group.
     
-    # Check conflicts in individual proposals for this group
+    Uses actual slot IDs (not a sequential range) for correct conflict detection.
+    """
+    slot_ids = {s.slot_id for s in slots}
+
     for proposal in proposals:
-        if (proposal.date == current_date and 
-            proposal.slot_id in slot_ids and
-            proposal.group_id == group_id):
-            return True
-    
-    # Check conflicts in blocks for this group
-    for block in blocks:
-        if (block.date == current_date and 
-            block.group_id == group_id and
-            any(slot_id in slot_ids for slot_id in range(block.start_slot_id, block.end_slot_id + 1))):
+        if (proposal.date == current_date
+                and proposal.slot_id in slot_ids
+                and proposal.group_id == group_id):
             return True
     
     return False
 
 
-def _room_available_for_slots(room, start_slot, end_slot, current_date, proposals, blocks):
-    """Check if a room is available for specific time slots."""
-    slot_ids = list(range(start_slot.slot_id, end_slot.slot_id + 1))
-    
-    # Check if room is available for all slots in the block
-    for slot_id in slot_ids:
-        # Check conflicts in individual proposals
-        for proposal in proposals:
-            if (proposal.date == current_date and 
-                proposal.slot_id == slot_id and
-                proposal.room_id == room.room_id):
-                return False
-        
-        # Check conflicts in blocks
-        for block in blocks:
-            if (block.date == current_date and 
-                block.room_id == room.room_id and
-                block.start_slot_id <= slot_id <= block.end_slot_id):
-                return False
-    
+def _room_available_for_slots(room, actual_slots, current_date, proposals):
+    """Check if a room is available for the given time slots.
+
+    Uses explicit slot IDs from actual_slots instead of a range to correctly
+    handle non-sequential database IDs.
+    """
+    slot_ids = {s.slot_id for s in actual_slots}
+    for proposal in proposals:
+        if (
+            proposal.date == current_date
+            and proposal.slot_id in slot_ids
+            and proposal.room_id == room.room_id
+        ):
+            return False
     return True
 
 
-def _find_available_room(rooms, start_slot, end_slot, current_date, proposals, blocks):
-    """Find an available room for the entire block."""
-    slot_ids = list(range(start_slot.slot_id, end_slot.slot_id + 1))
-    
+def _find_available_room(rooms, block_slots, current_date, proposals, blocks):
+    """Find an available room for the entire block (by explicit slot rows, not ID ranges)."""
+    if not rooms or not block_slots:
+        return None
+    slot_ids = {s.slot_id for s in block_slots}
+
     for room in rooms:
-        # Check if room is available for all slots in the block
-        room_available = True
-        
-        for slot_id in slot_ids:
-            # Check conflicts in individual proposals
-            for proposal in proposals:
-                if (proposal.date == current_date and 
-                    proposal.slot_id == slot_id and 
-                    proposal.room_id == room.room_id):
-                    room_available = False
-                    break
-            
-            if not room_available:
+        if not _room_available_for_slots(room, block_slots, current_date, proposals):
+            continue
+        conflict = False
+        for block in blocks:
+            if block.date != current_date or block.room_id != room.room_id:
+                continue
+            occupied = (
+                set(block.slot_ids)
+                if block.slot_ids
+                else {block.start_slot_id, block.end_slot_id}
+            )
+            if slot_ids & occupied:
+                conflict = True
                 break
-            
-            # Check conflicts in blocks
-            for block in blocks:
-                if (block.date == current_date and 
-                    block.room_id == room.room_id and
-                    slot_id in range(block.start_slot_id, block.end_slot_id + 1)):
-                    room_available = False
-                    break
-            
-            if not room_available:
-                break
-        
-        if room_available:
+        if not conflict:
             return room
-    
+
     return None
 
-@router.post("/preview", response_model=GenerationResult)
+def _ortools_generate(
+    groups_list, teachers_dict, rooms_list, slots_list,
+    enrollments_list, assignments_dict, courses_dict,
+    dates_list, ruleset, max_seconds: float = 20.0,
+    avail_by_teacher: Optional[Dict[int, List[TeacherAvailability]]] = None,
+) -> List[GeneratedLesson]:
+    """CP-SAT based generation.  Returns a list of GeneratedLesson proposals.
+
+    Uses pre-loaded plain Python objects so async SQLAlchemy lazy loading
+    is never triggered.  Falls back to empty list on any error so the
+    caller can use the heuristic instead.
+    """
+    try:
+        from ortools.sat.python import cp_model  # type: ignore
+
+        avail_by_teacher = avail_by_teacher or {}
+
+        model = cp_model.CpModel()
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = max_seconds
+
+        # Index helpers
+        date_idx = {d: i for i, d in enumerate(dates_list)}
+        slot_idx = {s.slot_id: i for i, s in enumerate(slots_list)}
+        room_idx = {r.room_id: i for i, r in enumerate(rooms_list)}
+        enr_idx  = {e.enrollment_id: i for i, e in enumerate(enrollments_list)}
+
+        # Build group_id → group map for capacity checks
+        groups_dict = {g.group_id: g for g in groups_list}
+
+        # Create boolean variables: x[enr, d, s, r]
+        x = {}
+        for e in enrollments_list:
+            ei = enr_idx[e.enrollment_id]
+            grp = groups_dict.get(e.group_id)
+            asgn = assignments_dict.get(e.assignment_id)
+            if not grp or not asgn:
+                continue
+            for di in range(len(dates_list)):
+                d = dates_list[di]
+                for si, slot in enumerate(slots_list):
+                    if not _teacher_slots_allowed(
+                        asgn.teacher_id, d, [slot], avail_by_teacher, ruleset.respect_availability
+                    ):
+                        continue
+                    for ri, room in enumerate(rooms_list):
+                        # Room capacity check
+                        if ruleset.room_capacity_check and grp.size > room.capacity:
+                            continue
+                        vname = f"x_{ei}_{di}_{si}_{ri}"
+                        x[(ei, di, si, ri)] = model.NewBoolVar(vname)
+
+        # Constraint: one lesson per room per (date, slot)
+        for di in range(len(dates_list)):
+            for si in range(len(slots_list)):
+                for ri in range(len(rooms_list)):
+                    room_vars = [x[k] for k in x if k[1] == di and k[2] == si and k[3] == ri]
+                    if room_vars:
+                        model.Add(sum(room_vars) <= 1)
+
+        # Constraint: one lesson per teacher per (date, slot)
+        teacher_var_map: Dict = {}
+        for e in enrollments_list:
+            asgn = assignments_dict.get(e.assignment_id)
+            if not asgn:
+                continue
+            tid = asgn.teacher_id
+            ei = enr_idx[e.enrollment_id]
+            for di in range(len(dates_list)):
+                for si in range(len(slots_list)):
+                    for ri in range(len(rooms_list)):
+                        key = (ei, di, si, ri)
+                        if key in x:
+                            teacher_var_map.setdefault((tid, di, si), []).append(x[key])
+        for vars_list in teacher_var_map.values():
+            if vars_list:
+                model.Add(sum(vars_list) <= 1)
+
+        # Constraint: one lesson per group per (date, slot)
+        group_var_map: Dict = {}
+        for e in enrollments_list:
+            ei = enr_idx[e.enrollment_id]
+            gid = e.group_id
+            for di in range(len(dates_list)):
+                for si in range(len(slots_list)):
+                    for ri in range(len(rooms_list)):
+                        key = (ei, di, si, ri)
+                        if key in x:
+                            group_var_map.setdefault((gid, di, si), []).append(x[key])
+        for vars_list in group_var_map.values():
+            if vars_list:
+                model.Add(sum(vars_list) <= 1)
+
+        # Constraint: max lessons per day per group
+        if ruleset.max_lessons_per_day_group > 0:
+            for gid in {e.group_id for e in enrollments_list}:
+                for di in range(len(dates_list)):
+                    day_vars = [x[k] for k in x if k[1] == di
+                                and any(e.group_id == gid and enr_idx[e.enrollment_id] == k[0]
+                                        for e in enrollments_list)]
+                    if day_vars:
+                        model.Add(sum(day_vars) <= ruleset.max_lessons_per_day_group)
+
+        # Objective: maximise scheduled lessons
+        model.Maximize(sum(x.values()))
+
+        status = solver.Solve(model)
+
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return []
+
+        proposals: List[GeneratedLesson] = []
+        for (ei, di, si, ri), var in x.items():
+            if solver.Value(var) == 1:
+                enr = enrollments_list[ei]
+                slot = slots_list[si]
+                room = rooms_list[ri]
+                asgn = assignments_dict.get(enr.assignment_id)
+                grp  = groups_dict.get(enr.group_id)
+                if not asgn or not grp:
+                    continue
+                teacher = teachers_dict.get(asgn.teacher_id)
+                course  = courses_dict.get(asgn.course_id)
+                if not teacher or not course:
+                    continue
+                proposals.append(GeneratedLesson(
+                    date=dates_list[di],
+                    slot_id=slot.slot_id,
+                    room_id=room.room_id,
+                    enrollment_id=enr.enrollment_id,
+                    group_id=grp.group_id,
+                    group_name=grp.name,
+                    teacher_name=f"{teacher.first_name} {teacher.last_name}",
+                    course_name=course.name,
+                    room_number=room.number,
+                    start_time=str(slot.start_time),
+                    end_time=str(slot.end_time),
+                ))
+        return proposals
+    except Exception as exc:
+        logger.warning(f"OR-Tools generation failed, using heuristic fallback: {exc}")
+        return []
+
+
+@router.post("/preview")
 async def preview_generation(
     request: GenerationRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user_or_demo)
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_active_user_or_demo),
 ):
-    """Generate schedule preview using real data."""
-    return await _preview_generation_internal(request, db, current_user)
+    """Start async schedule preview. Returns {job_id}; poll /preview-status/{job_id}."""
+    _purge_old_jobs()
+    job_id, _ = _new_job()
+    background_tasks.add_task(_run_bg_preview, job_id, request, current_user.org_id)
+    return {"job_id": job_id}
 
-@router.post("/run", response_model=Dict[str, Any])
+
+@router.get("/preview-status/{job_id}")
+async def get_preview_status(
+    job_id: str,
+    current_user: User = Depends(get_current_active_user_or_demo),
+):
+    """Poll for the result of a preview job."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return {"status": job["status"], "result": job["result"], "error": job["error"]}
+
+
+@router.post("/run")
 async def run_generation(
     request: GenerationRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user_or_demo)
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_active_user_or_demo),
 ):
-    """Run schedule generation and save to database."""
-    
-    try:
-        # Verify term exists or find term by date range
-        from sqlalchemy import select
-        
-        logger.info(f"DEBUG: Starting generation with request.term_id={request.term_id}, from_date={request.from_date}, to_date={request.to_date}")
-        
-        term = None
-        
-        # If term_id is provided, try to find it
-        if request.term_id:
-            term_result = await db.execute(
-                select(Term).where(
-                    Term.term_id == request.term_id,
-                    Term.org_id == current_user.org_id
-                )
-            )
-            term = term_result.scalar_one_or_none()
-            logger.info(f"DEBUG: Initial term lookup: term_id={request.term_id}, found={term is not None}")
-        
-        # If term not found, try to find term that covers the date range
-        if not term:
-            logger.info(f"DEBUG: Term {request.term_id} not found, searching by date range...")
-            
-            # First, try to find term that covers the entire date range
-            term_by_date_result = await db.execute(
-                select(Term).where(
-                    Term.org_id == current_user.org_id,
-                    Term.start_date <= request.from_date,
-                    Term.end_date >= request.to_date
-                ).order_by(Term.start_date.desc())
-            )
-            term = term_by_date_result.scalar_one_or_none()
-            logger.info(f"DEBUG: Term by full date range lookup: found={term is not None}")
-            
-            if not term:
-                # Try to find any term that covers at least the start date
-                term_by_start_result = await db.execute(
-                    select(Term).where(
-                        Term.org_id == current_user.org_id,
-                        Term.start_date <= request.from_date,
-                        Term.end_date >= request.from_date
-                    ).order_by(Term.start_date.desc())
-                )
-                term = term_by_start_result.scalar_one_or_none()
-                logger.info(f"DEBUG: Term by start date lookup: found={term is not None}")
-            
-            if not term:
-                # Try to find any term that covers at least the end date
-                term_by_end_result = await db.execute(
-                    select(Term).where(
-                        Term.org_id == current_user.org_id,
-                        Term.start_date <= request.to_date,
-                        Term.end_date >= request.to_date
-                    ).order_by(Term.start_date.desc())
-                )
-                term = term_by_end_result.scalar_one_or_none()
-                logger.info(f"DEBUG: Term by end date lookup: found={term is not None}")
-            
-            if not term:
-                # Last resort: find any term that overlaps with the date range
-                term_overlap_result = await db.execute(
-                    select(Term).where(
-                        Term.org_id == current_user.org_id,
-                        Term.start_date <= request.to_date,
-                        Term.end_date >= request.from_date
-                    ).order_by(Term.start_date.desc())
-                )
-                term = term_overlap_result.scalar_one_or_none()
-                logger.info(f"DEBUG: Term by overlap lookup: found={term is not None}")
-            
-            if not term:
-                # Final fallback: get any term for this org (for debugging)
-                any_term_result = await db.execute(
-                    select(Term).where(
-                        Term.org_id == current_user.org_id
-                    ).order_by(Term.start_date.desc())
-                )
-                any_term = any_term_result.scalar_one_or_none()
-                if any_term:
-                    logger.warning(f"DEBUG: Found term {any_term.term_id} but it doesn't cover the date range. Term dates: {any_term.start_date} to {any_term.end_date}")
-                else:
-                    logger.error(f"DEBUG: No terms found for org_id={current_user.org_id}")
-        
-        # If still no term found, auto-create one
-        if not term:
-            logger.info(f"DEBUG: No term found, auto-creating term for date range {request.from_date} to {request.to_date}")
-            
-            # Find or create academic year that covers the date range
-            academic_year_result = await db.execute(
-                select(AcademicYear).where(
-                    AcademicYear.org_id == current_user.org_id,
-                    AcademicYear.start_date <= request.from_date,
-                    AcademicYear.end_date >= request.to_date
-                ).order_by(AcademicYear.start_date.desc())
-            )
-            academic_year = academic_year_result.scalar_one_or_none()
-            
-            if not academic_year:
-                # Create academic year based on the date range
-                year_start = request.from_date.year
-                year_end = request.to_date.year
-                if year_start == year_end:
-                    year_name = f"{year_start}-{year_start + 1}"
-                else:
-                    year_name = f"{year_start}-{year_end}"
-                
-                # Extend dates to cover full academic year (September to June)
-                academic_start = date(year_start, 9, 1) if request.from_date.month >= 9 else date(year_start - 1, 9, 1)
-                academic_end = date(year_start + 1, 6, 30) if request.from_date.month >= 9 else date(year_start, 6, 30)
-                
-                academic_year = AcademicYear(
-                    org_id=current_user.org_id,
-                    name=year_name,
-                    start_date=academic_start,
-                    end_date=academic_end
-                )
-                db.add(academic_year)
-                await db.flush()
-                logger.info(f"DEBUG: Created academic year {academic_year.id}: {year_name}")
-            
-            # Create term for the date range
-            term_name = f"Семестр {request.from_date.strftime('%d.%m.%Y')} - {request.to_date.strftime('%d.%m.%Y')}"
-            term = Term(
-                org_id=current_user.org_id,
-                academic_year_id=academic_year.id,
-                name=term_name,
-                start_date=request.from_date,
-                end_date=request.to_date
-            )
-            db.add(term)
-            await db.flush()
-            # Note: Don't commit here - will commit after lessons are created
-            logger.info(f"DEBUG: Auto-created term {term.term_id}: {term_name} ({term.start_date} to {term.end_date})")
-        
-        # Ensure term covers the entire requested date range
-        # If term was found but doesn't cover the full range, extend it
-        if term.start_date > request.from_date or term.end_date < request.to_date:
-            logger.warning(f"DEBUG: Term {term.term_id} ({term.start_date} to {term.end_date}) doesn't cover full range ({request.from_date} to {request.to_date}). Extending...")
-            term.start_date = min(term.start_date, request.from_date)
-            term.end_date = max(term.end_date, request.to_date)
-            await db.flush()
-            logger.info(f"DEBUG: Extended term {term.term_id} to cover {term.start_date} to {term.end_date}")
-        
-        # Use the found term_id (either the requested one or the auto-found one)
-        actual_term_id = term.term_id
-        logger.info(f"DEBUG: Using term_id={actual_term_id} for generation (requested was {request.term_id}), term covers {term.start_date} to {term.end_date}")
-        
-        # Generate preview first
-        preview_result = await _preview_generation_internal(request, db, current_user)
-        
-        if not preview_result.success:
-            return {
-                "message": "Generation failed",
-                "result": preview_result
-            }
-        
-        # Clear existing lessons for the date range (if any exist)
-        from sqlalchemy import delete
-        existing_lessons = await db.execute(
-            select(LessonInstance).where(
-                LessonInstance.org_id == current_user.org_id,
-                LessonInstance.date >= request.from_date,
-                LessonInstance.date <= request.to_date
-            )
-        )
-        if existing_lessons.scalars().first():
-            await db.execute(
-                delete(LessonInstance).where(
-                    LessonInstance.org_id == current_user.org_id,
-                    LessonInstance.date >= request.from_date,
-                    LessonInstance.date <= request.to_date
-                )
-            )
-        
-        # Check all proposal dates and ensure term covers them all
-        if preview_result.proposals:
-            proposal_dates = [p.date for p in preview_result.proposals]
-            min_proposal_date = min(proposal_dates)
-            max_proposal_date = max(proposal_dates)
-            
-            logger.info(f"DEBUG: Proposal date range: {min_proposal_date} to {max_proposal_date}")
-            logger.info(f"DEBUG: Current term range: {term.start_date} to {term.end_date}")
-            logger.info(f"DEBUG: Term ID: {term.term_id}")
-            
-            # If term doesn't cover all proposal dates, extend it
-            needs_extension = False
-            if term.start_date > min_proposal_date:
-                logger.warning(f"DEBUG: Term start_date {term.start_date} > min_proposal_date {min_proposal_date}, need to extend")
-                needs_extension = True
-            if term.end_date < max_proposal_date:
-                logger.warning(f"DEBUG: Term end_date {term.end_date} < max_proposal_date {max_proposal_date}, need to extend")
-                needs_extension = True
-            
-            if needs_extension:
-                old_start = term.start_date
-                old_end = term.end_date
-                term.start_date = min(term.start_date, min_proposal_date)
-                term.end_date = max(term.end_date, max_proposal_date)
-                await db.flush()
-                logger.info(f"DEBUG: Extended term {term.term_id} from {old_start}-{old_end} to {term.start_date}-{term.end_date}")
-        
-        # Verify term has term_id after flush
-        if not term.term_id:
-            await db.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to create term: term_id is None after flush()."
-            )
-        
-        logger.info(f"DEBUG: Final term state - ID: {term.term_id}, range: {term.start_date} to {term.end_date}")
-        
-        # Create lessons from proposals and save to database
-        created_lessons = []
-        for idx, proposal in enumerate(preview_result.proposals):
-            logger.info(f"DEBUG: Processing proposal {idx+1}/{len(preview_result.proposals)}: date={proposal.date}")
-            
-            # Check if proposal date is within term range
-            if proposal.date < term.start_date or proposal.date > term.end_date:
-                logger.error(f"DEBUG: Proposal date {proposal.date} is OUTSIDE term range {term.start_date} to {term.end_date}")
-                await db.rollback()
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"No term found that covers date {proposal.date}. Term {term.term_id} covers {term.start_date} to {term.end_date}, but proposal date is {proposal.date}. This should not happen after term extension."
-                )
-            
-            # Use the term we found/created/extended
-            proposal_term = term
-            lesson_term_id = proposal_term.term_id
-            
-            logger.info(f"DEBUG: Using term {lesson_term_id} for proposal date {proposal.date}")
-            
-            # Double-check that term_id is valid
-            if not lesson_term_id or lesson_term_id <= 0:
-                await db.rollback()
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid term_id {lesson_term_id} found for date {proposal.date}."
-                )
-            
-            # Ensure we're using the found term_id
-            lesson_term_id = proposal_term.term_id
-            
-            # Double-check that term_id is valid (not None and not 0)
-            if not lesson_term_id or lesson_term_id <= 0:
-                await db.rollback()
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid term_id {lesson_term_id} found for date {proposal.date}."
-                )
-            
-            # Log for debugging
-            logger.info(f"Creating lesson for date {proposal.date} with term_id={lesson_term_id}")
-            
-            # Create lesson with verified term_id
-            lesson = LessonInstance(
-                org_id=current_user.org_id,
-                term_id=lesson_term_id,
-                date=proposal.date,
-                slot_id=proposal.slot_id,
-                room_id=proposal.room_id,
-                enrollment_id=proposal.enrollment_id,
-                status=LessonStatus.CONFIRMED,
-                created_by=current_user.user_id
-            )
-            
-            db.add(lesson)
-            created_lessons.append(lesson)
-        
-        # Flush to ensure all objects are in session before commit
-        await db.flush()
-        
-        # Basic verification: check that all lessons have valid term_id
-        logger.info(f"Verifying {len(created_lessons)} lessons before commit")
-        for idx, lesson in enumerate(created_lessons):
-            if not lesson.term_id or lesson.term_id <= 0:
-                await db.rollback()
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid term_id {lesson.term_id} found in lesson for date {lesson.date}."
-                )
-            logger.debug(f"Lesson {idx}: date={lesson.date}, term_id={lesson.term_id}")
-        
-        # Final verification before commit
-        logger.info(f"DEBUG: Final verification before commit - all lessons have correct term_id")
-        for idx, lesson in enumerate(created_lessons):
-            if lesson.term_id == 1:
-                await db.rollback()
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"CRITICAL: Lesson {idx} still has term_id=1! This should not happen. Date: {lesson.date}"
-                )
-        
-        # Commit all lessons to database
-        await db.commit()
-        
-        # Don't refresh lessons - we don't need to access relationships
-        # All data is already available from the proposals, and refresh can cause lazy loading issues
-        
-        created_count = len(created_lessons)
-        
-        return {
-            "message": f"Generation completed successfully! Created {created_count} lessons in {len(preview_result.blocks)} blocks.",
-            "created_lessons": created_count,
-            "total_blocks": len(preview_result.blocks),
-            "total_proposals": len(preview_result.proposals),
-            "stats": preview_result.stats,
-            "preview": preview_result.proposals[:10],  # Show first 10 lessons as preview
-            "blocks_preview": preview_result.blocks[:5]  # Show first 5 blocks as preview
-        }
-        
-    except HTTPException:
-        # Re-raise HTTPException so it's properly handled by FastAPI
-        await db.rollback()
-        raise
-    except Exception as e:
-        await db.rollback()
-        logger.error(f"Generation error: {str(e)}", exc_info=True)
-        return {
-            "message": f"Generation failed: {str(e)}",
-            "error": str(e),
-            "success": False
-        }
+    """Start async generation+save. Returns {job_id}; poll /run-status/{job_id}."""
+    _purge_old_jobs()
+    job_id, _ = _new_job()
+    background_tasks.add_task(_run_bg_save, job_id, request, current_user.org_id, current_user.user_id)
+    return {"job_id": job_id}
+
+
+@router.get("/run-status/{job_id}")
+async def get_run_status(
+    job_id: str,
+    current_user: User = Depends(get_current_active_user_or_demo),
+):
+    """Poll for the result of a run-generation job."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return {"status": job["status"], "result": job["result"], "error": job["error"]}
+
 
 @router.get("/stats")
 async def get_generation_stats(

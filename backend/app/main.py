@@ -8,8 +8,8 @@ import logging
 
 from .core.config import settings
 from .routers import (
-    auth, organizations, users, academic_real as academic, educational_real as educational, 
-    facilities_real as facilities, scheduling, generation, reports, lessons
+    auth, organizations, users, academic_real as academic, educational_real as educational,
+    facilities_real as facilities, scheduling, generation, reports, lessons, tg_admin, admin
 )
 
 # Configure logging
@@ -87,6 +87,8 @@ app.include_router(facilities.router, prefix=f"{settings.API_V1_PREFIX}/faciliti
 app.include_router(lessons.router, prefix=f"{settings.API_V1_PREFIX}/lessons", tags=["lessons"])
 app.include_router(generation.router, prefix=f"{settings.API_V1_PREFIX}/generation", tags=["generation"])
 app.include_router(reports.router, prefix=f"{settings.API_V1_PREFIX}/reports", tags=["reports"])
+app.include_router(tg_admin.router, prefix=f"{settings.API_V1_PREFIX}/tg", tags=["tg-admin"])
+app.include_router(admin.router,    prefix=f"{settings.API_V1_PREFIX}/admin", tags=["admin"])
 
 
 if __name__ == "__main__":

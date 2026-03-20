@@ -322,7 +322,6 @@ class HolidayResponse(BaseModel):
     name: str
 
 class HolidayCreate(BaseModel):
-    org_id: int
     date: date
     name: str
 
@@ -364,7 +363,7 @@ async def create_holiday(
 ):
     """Create a new holiday."""
     new_holiday = Holiday(
-        org_id=holiday.org_id,
+        org_id=current_user.org_id,
         date=holiday.date,
         name=holiday.name
     )
@@ -414,7 +413,6 @@ class TeacherAvailabilityResponse(BaseModel):
     is_available: bool = True
 
 class TeacherAvailabilityCreate(BaseModel):
-    org_id: int
     teacher_id: int
     weekday: int
     start_time: time
@@ -468,7 +466,7 @@ async def create_teacher_availability(
 ):
     """Create a new teacher availability."""
     new_availability = TeacherAvailability(
-        org_id=availability.org_id,
+        org_id=current_user.org_id,
         teacher_id=availability.teacher_id,
         weekday=availability.weekday,
         start_time=availability.start_time,

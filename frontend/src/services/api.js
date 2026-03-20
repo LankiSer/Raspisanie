@@ -85,7 +85,9 @@ export const lessonsAPI = {
 
 export const generationAPI = {
   preview: (data) => api.post('/generation/preview', data),
+  previewStatus: (jobId) => api.get(`/generation/preview-status/${jobId}`),
   run: (data) => api.post('/generation/run', data),
+  runStatus: (jobId) => api.get(`/generation/run-status/${jobId}`),
   getStats: () => api.get('/generation/stats'),
   getJobs: (params = {}) => api.get('/generation/jobs', { params }),
   getJob: (jobId) => api.get(`/generation/jobs/${jobId}`),
@@ -105,10 +107,6 @@ export const catalogAPI = {
   createTeacher: (data) => api.post('/educational/teachers', data),
   updateTeacher: (id, data) => api.patch(`/educational/teachers/${id}`, data),
   deleteTeacher: (id) => api.delete(`/educational/teachers/${id}`),
-  
-  // Teacher availability
-  getTeacherAvailability: (teacherId) => api.get(`/facilities/teacher-availability?teacher_id=${teacherId}`),
-  updateTeacherAvailability: (teacherId, data) => api.post(`/facilities/teacher-availability`, { teacher_id: teacherId, ...data }),
   
   // Courses
   getCourses: (params = {}) => api.get('/educational/courses', { params }),
@@ -161,7 +159,13 @@ export const reportsAPI = {
   getTeacherWorkload: (params) => api.get('/reports/workload/teacher', { params }),
   getGroupWorkload: (params) => api.get('/reports/workload/group', { params }),
   getConflicts: (params) => api.get('/reports/conflicts', { params }),
+  getHoursLog: (params) => api.get('/reports/hours-log', { params }),
+  downloadPdf: (params) => api.get('/reports/pdf/schedule', { params, responseType: 'blob' }),
   exportIcal: (params) => api.get('/exports/ical', { params, responseType: 'blob' }),
+}
+
+export const adminAPI = {
+  seed: () => api.post('/admin/seed'),
 }
 
 // All APIs now use real backend

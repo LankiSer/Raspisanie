@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Schedule generation
     MAX_GENERATION_JOBS_PER_ORG: int = 5
     GENERATION_TIMEOUT_SECONDS: int = 300
+
+    # Telegram bot (optional)
+    BOT_TOKEN: str = ""
     
     class Config:
         env_file = ".env"

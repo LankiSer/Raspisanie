@@ -6,8 +6,9 @@
     }"
     @click="handleCellClick"
     @drop="handleDrop"
-    @dragover.prevent
+    @dragover="handleDragOver"
     @dragenter.prevent
+    @dragleave="handleDragLeave"
   >
     <!-- Lessons in this cell -->
     <div
@@ -26,7 +27,7 @@
       </div>
       
       <!-- Teacher & Group -->
-      <div class="text-xs opacity-90 leading-tight">
+      <div class="text-xs text-gray-700 leading-tight">
         <div class="truncate">
           {{ lesson.teacher_name || 'Преподаватель' }}
         </div>
@@ -36,14 +37,14 @@
       </div>
       
       <!-- Room -->
-      <div class="text-xs opacity-75 truncate">
+      <div class="text-xs text-gray-600 truncate">
         {{ lesson.room_number || 'Ауд. не назначена' }}
       </div>
       
       <!-- Status indicator -->
       <div
         v-if="lesson.status !== 'planned'"
-        class="absolute top-0 right-0 w-2 h-2 rounded-full bg-white bg-opacity-50"
+        class="absolute top-1 right-1 w-2 h-2 rounded-full bg-gov-600 ring-1 ring-white"
         :title="getStatusTitle(lesson.status)"
       ></div>
     </div>
@@ -98,9 +99,11 @@ export default {
     const dragOver = ref(false)
 
     const getLessonCardClass = (lesson) => {
-      const baseClass = 'lesson-card'
-      const statusClass = `lesson-card-${lesson.status}`
-      return `${baseClass} ${statusClass}`
+      const raw = (lesson.status || 'planned').toString().toLowerCase()
+      const st = ['planned', 'confirmed', 'completed', 'cancelled', 'moved', 'skipped'].includes(raw)
+        ? raw
+        : 'planned'
+      return `lesson-card lesson-card-${st}`
     }
 
 
@@ -131,8 +134,9 @@ export default {
         return
       }
 
+      // Store the full lesson object so target cell has version for optimistic locking
       event.dataTransfer.setData('text/plain', JSON.stringify({
-        lesson_id: lesson.lesson_id,
+        lesson,
         source_date: props.date,
         source_slot_id: props.slot.slot_id
       }))
@@ -159,17 +163,8 @@ export default {
 
       try {
         const data = JSON.parse(event.dataTransfer.getData('text/plain'))
-        const lessonId = data.lesson_id
-        
-        // Find the lesson being moved
-        const lesson = props.lessons.find(l => l.lesson_id === lessonId)
-        if (!lesson) {
-          // Lesson might be from another cell - we need to get it from the drag data
-          // For now, we'll emit the event with the data we have
-          emit('lesson-drop', { lesson_id: lessonId }, props.date, props.slot.slot_id)
-        } else {
-          emit('lesson-drop', lesson, props.date, props.slot.slot_id)
-        }
+        // Full lesson object is always in drag data — includes version for optimistic locking
+        emit('lesson-drop', data.lesson, props.date, props.slot.slot_id)
       } catch (error) {
         console.error('Error parsing drag data:', error)
       }

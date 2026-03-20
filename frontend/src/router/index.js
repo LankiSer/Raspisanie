@@ -7,6 +7,7 @@ const Dashboard = () => import('@/pages/Dashboard.vue')
 const Schedule = () => import('@/pages/Schedule.vue')
 const Generation = () => import('@/pages/Generation.vue')
 const Reports = () => import('@/pages/Reports.vue')
+const TgAdmin = () => import('@/pages/TgAdmin.vue')
 
 // Catalog pages
 const Groups = () => import('@/pages/catalog/Groups.vue')
@@ -142,6 +143,16 @@ const routes = [
       title: 'Доступность преподавателей',
       roles: ['admin', 'methodist']
     }
+  },
+  {
+    path: '/tg-admin',
+    name: 'TgAdmin',
+    component: TgAdmin,
+    meta: {
+      requiresAuth: true,
+      title: 'Telegram — диалоги',
+      roles: ['admin', 'methodist'],
+    },
   },
   {
     path: '/:pathMatch(.*)*',

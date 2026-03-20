@@ -138,22 +138,26 @@ async def get_current_user_info(
 
 @router.post("/demo-login", response_model=LoginResponse)
 async def demo_login(db: AsyncSession = Depends(get_db)):
-    """Demo login for development/testing."""
-    # Get first available user
+    """Demo login — only available when DEBUG=True."""
+    if not settings.DEBUG:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found"
+        )
+
     user_repo = UserRepository(db)
-    user = await user_repo.get_by_id(1)  # Get first user
-    
+    user = await user_repo.get_by_id(1)
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No demo user found"
         )
-    
-    # Create demo access token
+
     access_token = create_access_token(
         data={"sub": str(user.user_id), "org_id": user.org_id}
     )
-    
+
     return LoginResponse(
         access_token=access_token,
         user=UserInfo(

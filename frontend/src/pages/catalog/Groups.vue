@@ -1,10 +1,10 @@
 <template>
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <div class="page-container">
     <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+    <div class="page-header">
       <div>
-        <h1 class="text-3xl font-bold text-gray-900">Группы</h1>
-        <p class="text-gray-600 mt-1">Управление студенческими группами</p>
+        <h1>Группы</h1>
+        <p class="text-gray-500 text-sm mt-0.5">Управление студенческими группами</p>
       </div>
       <button 
         @click="openCreateModal"
@@ -18,7 +18,7 @@
     </div>
 
     <!-- Search and Filters -->
-    <div class="bg-white shadow rounded-lg p-4 mb-6">
+    <div class="card card-body mb-4">
       <div class="flex flex-col sm:flex-row gap-4">
         <div class="flex-1">
           <div class="relative">
@@ -54,7 +54,7 @@
     </div>
 
     <!-- Groups Table -->
-    <div class="bg-white shadow rounded-lg overflow-hidden">
+    <div class="card overflow-hidden">
       <div v-if="loading" class="p-8 text-center">
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
         <p class="mt-2 text-gray-600">Загрузка...</p>

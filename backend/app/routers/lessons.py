@@ -524,12 +524,25 @@ async def update_lesson(
     
     if not existing_lesson:
         raise HTTPException(status_code=404, detail="LessonInstance not found")
+
+    if lesson.version is not None and lesson.version != existing_lesson.version:
+        raise HTTPException(
+            status_code=409,
+            detail="Занятие изменено другим пользователем. Обновите страницу.",
+        )
     
-    # Update fields - only update non-None values
+    # Update fields — только явно переданные непустые значения
     update_data = lesson.model_dump(exclude_unset=True, exclude_none=True)
-    
-    # Debug logging
-    print(f"Update data: {update_data}")
+    # version не пишем через setattr из тела запроса
+    update_data.pop("version", None)
+    # Нельзя обнулять обязательные поля PATCH-ом
+    for key in ("slot_id", "enrollment_id", "term_id"):
+        if key in update_data and update_data[key] is None:
+            del update_data[key]
+    if "slot_id" in update_data:
+        sid = update_data["slot_id"]
+        if not isinstance(sid, int) or sid < 1:
+            raise HTTPException(status_code=400, detail="Некорректный slot_id")
     
     for field, value in update_data.items():
         if hasattr(existing_lesson, field):
@@ -545,6 +558,8 @@ async def update_lesson(
                 except ValueError:
                     raise HTTPException(status_code=400, detail=f"Invalid status: {value}")
             setattr(existing_lesson, field, value)
+
+    existing_lesson.version = (existing_lesson.version or 1) + 1
     
     # Update updated_by and updated_at
     existing_lesson.updated_by = current_user.user_id

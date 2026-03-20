@@ -1,12 +1,11 @@
 <template>
-  <div class="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <div class="page-container">
     <!-- Header -->
-    <div class="mb-6">
-      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 class="text-3xl font-bold text-gray-900">Расписание</h1>
-          <p class="text-gray-600 mt-1">Управление расписанием занятий</p>
-        </div>
+    <div class="page-header mb-4">
+      <div>
+        <h1>Расписание</h1>
+        <p class="text-gray-500 text-sm mt-0.5">Управление расписанием занятий</p>
+      </div>
         <div v-if="authStore.canManageSchedule" class="flex flex-wrap gap-3">
           <button
             @click="showCreateLessonModal = true"
@@ -38,7 +37,6 @@
             Обновить
           </button>
         </div>
-      </div>
     </div>
 
     <!-- Filters -->
@@ -52,6 +50,7 @@
             <option value="week">Неделя</option>
             <option value="groups">По группам</option>
             <option value="all-groups">Все группы</option>
+            <option value="month">Месяц</option>
           </select>
         </div>
         <div>
@@ -108,46 +107,65 @@
     <div v-else class="bg-white rounded-lg shadow overflow-hidden">
       <!-- Week view -->
       <div v-if="filters.viewType === 'week'">
-        <!-- Header -->
-        <div class="grid grid-cols-8 bg-gray-50 border-b">
-          <div class="p-4 font-medium text-gray-900 border-r">Время</div>
+        <div class="space-y-6 p-4">
           <div
-            v-for="day in weekDays"
+            v-for="day in weekDaysWork"
             :key="day.date"
-            class="p-4 font-medium text-gray-900 border-r text-center"
+            class="border rounded-lg overflow-hidden bg-white shadow-sm"
           >
-            <div>{{ day.name }}</div>
-            <div class="text-sm text-gray-500">{{ formatDate(day.date) }}</div>
-          </div>
-        </div>
+            <div class="bg-gray-50 border-b px-4 py-3">
+              <div class="font-semibold text-gray-900">{{ day.name }}</div>
+              <div class="text-xs text-gray-500">{{ formatDate(day.date) }}</div>
+            </div>
 
-        <!-- Time slots -->
-        <div
-          v-for="slot in timeSlots"
-          :key="slot.slot_id"
-          class="grid grid-cols-8 border-b hover:bg-gray-50"
-        >
-          <!-- Time column -->
-          <div class="p-4 border-r bg-gray-50 text-sm font-medium text-gray-700">
-            <div>{{ slot.start_time }} - {{ slot.end_time }}</div>
-            <div v-if="slot.label" class="text-xs text-gray-500">{{ slot.label }}</div>
-          </div>
+            <div class="overflow-x-auto">
+              <table class="min-w-full divide-y divide-gray-200 table-fixed">
+                <thead class="bg-gray-50 sticky top-0 z-10">
+                  <tr>
+                    <th
+                      class="w-32 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b"
+                    >
+                      Время
+                    </th>
+                    <th
+                      v-for="group in filteredGroups"
+                      :key="group.group_id"
+                      class="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b"
+                      style="min-width: 210px;"
+                    >
+                      <div class="truncate">{{ group.name }}</div>
+                      <div class="text-xs text-gray-400">{{ group.size }} ст.</div>
+                    </th>
+                  </tr>
+                </thead>
 
-          <!-- Day cells -->
-          <div
-            v-for="day in weekDays"
-            :key="`${slot.slot_id}-${day.date}`"
-            class="relative border-r h-20"
-          >
-            <ScheduleCell
-              :date="day.date"
-              :slot="slot"
-              :lessons="getLessonsForCell(day.date, slot.slot_id)"
-              :can-edit="authStore.canManageSchedule"
-              @lesson-click="handleLessonClick"
-              @cell-click="handleCellClick"
-              @lesson-drop="handleLessonDrop"
-            />
+                <tbody class="divide-y divide-gray-200">
+                  <tr v-for="slot in timeSlots" :key="slot.slot_id">
+                    <td class="px-4 py-2 border-b text-sm font-medium text-gray-700 bg-gray-50 align-top">
+                      <div>{{ formatSlotTime(slot.start_time) }} – {{ formatSlotTime(slot.end_time) }}</div>
+                      <div v-if="slot.label" class="text-xs text-gray-500">{{ slot.label }}</div>
+                    </td>
+                    <td
+                      v-for="group in filteredGroups"
+                      :key="`${group.group_id}-${slot.slot_id}`"
+                      class="border-b p-0"
+                    >
+                      <div class="relative h-20">
+                        <ScheduleCell
+                          :date="day.date"
+                          :slot="slot"
+                          :lessons="getLessonsForCellWithGroup(day.date, slot.slot_id, group.name)"
+                          :can-edit="authStore.canManageSchedule"
+                          @lesson-click="handleLessonClick"
+                          @cell-click="(date, slotId) => handleCellClick(date, slotId, group.group_id)"
+                          @lesson-drop="(lesson, targetDate, targetSlotId) => handleLessonDrop(lesson, targetDate, targetSlotId, group.name)"
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -161,7 +179,7 @@
         >
           <!-- Time column -->
           <div class="w-32 p-4 bg-gray-50 text-sm font-medium text-gray-700 border-r">
-            <div>{{ slot.start_time }} - {{ slot.end_time }}</div>
+            <div>{{ formatSlotTime(slot.start_time) }} – {{ formatSlotTime(slot.end_time) }}</div>
             <div v-if="slot.label" class="text-xs text-gray-500">{{ slot.label }}</div>
           </div>
 
@@ -176,6 +194,69 @@
               @cell-click="handleCellClick"
               @lesson-drop="handleLessonDrop"
             />
+          </div>
+        </div>
+      </div>
+
+      <!-- Month view -->
+      <div v-else-if="filters.viewType === 'month'" class="space-y-6 p-4">
+        <div
+          v-for="day in monthDays"
+          :key="day.date"
+          class="border rounded-lg overflow-hidden bg-white shadow-sm"
+        >
+          <div class="bg-gray-50 border-b px-4 py-3">
+            <div class="font-semibold text-gray-900">{{ day.name }}</div>
+            <div class="text-xs text-gray-500">{{ formatDate(day.date) }}</div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 table-fixed">
+              <thead class="bg-gray-50 sticky top-0 z-10">
+                <tr>
+                  <th
+                    class="w-32 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b"
+                  >
+                    Время
+                  </th>
+                  <th
+                    v-for="group in filteredGroups"
+                    :key="group.group_id"
+                    class="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b"
+                    style="min-width: 210px;"
+                  >
+                    <div class="truncate">{{ group.name }}</div>
+                    <div class="text-xs text-gray-400">{{ group.size }} ст.</div>
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody class="divide-y divide-gray-200">
+                <tr v-for="slot in timeSlots" :key="slot.slot_id">
+                  <td class="px-4 py-2 border-b text-sm font-medium text-gray-700 bg-gray-50 align-top">
+                    <div>{{ formatSlotTime(slot.start_time) }} – {{ formatSlotTime(slot.end_time) }}</div>
+                    <div v-if="slot.label" class="text-xs text-gray-500">{{ slot.label }}</div>
+                  </td>
+                  <td
+                    v-for="group in filteredGroups"
+                    :key="`${group.group_id}-${slot.slot_id}`"
+                    class="border-b p-0"
+                  >
+                    <div class="relative h-20">
+                      <ScheduleCell
+                        :date="day.date"
+                        :slot="slot"
+                        :lessons="getLessonsForCellWithGroup(day.date, slot.slot_id, group.name)"
+                        :can-edit="authStore.canManageSchedule"
+                        @lesson-click="handleLessonClick"
+                        @cell-click="(date, slotId) => handleCellClick(date, slotId, group.group_id)"
+                        @lesson-drop="(lesson, targetDate, targetSlotId) => handleLessonDrop(lesson, targetDate, targetSlotId, group.name)"
+                      />
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -213,7 +294,7 @@
                   <div
                     v-for="lesson in getGroupLessonsForDay(group.group_id, day.date)"
                     :key="lesson.lesson_id"
-                    class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded cursor-pointer hover:bg-blue-200"
+                    class="bg-gov-50 border border-gov-200 text-gov-900 text-xs px-2 py-1 rounded cursor-pointer hover:bg-gov-100"
                     @click="handleLessonClick(lesson, $event)"
                   >
                     <div class="font-medium">{{ lesson.course_name }}</div>
@@ -252,7 +333,7 @@
         >
           <!-- Time column -->
           <div class="p-4 border-r bg-gray-50 text-sm font-medium text-gray-700">
-            <div>{{ slot.start_time }} - {{ slot.end_time }}</div>
+            <div>{{ formatSlotTime(slot.start_time) }} – {{ formatSlotTime(slot.end_time) }}</div>
             <div v-if="slot.label" class="text-xs text-gray-500">{{ slot.label }}</div>
           </div>
 
@@ -296,6 +377,7 @@
       :lesson="editingLesson"
       :initial-date="modalInitialDate"
       :initial-slot-id="modalInitialSlotId"
+      :initial-group-id="modalInitialGroupId"
       @close="closeLessonModal"
       @saved="handleLessonSaved"
     />
@@ -311,6 +393,7 @@
       @move="handleMoveLesson"
       @cancel="handleCancelLesson"
       @delete="handleDeleteLesson"
+      @status-changed="loadSchedule"
     />
   </div>
 </template>
@@ -320,7 +403,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { CalendarIcon } from '@heroicons/vue/24/outline'
 import { useAuthStore } from '@/stores/auth'
 import { lessonsAPI, catalogAPI } from '@/services/api'
-import { format, addDays, startOfWeek, parseISO } from 'date-fns'
+import { format, addDays, startOfWeek, parseISO, startOfMonth, endOfMonth } from 'date-fns'
 import { ru } from 'date-fns/locale'
 import ScheduleCell from '@/components/ScheduleCell.vue'
 import LessonModal from '@/components/LessonModal.vue'
@@ -356,6 +439,7 @@ export default {
     const editingLesson = ref(null)
     const modalInitialDate = ref('')
     const modalInitialSlotId = ref(null)
+    const modalInitialGroupId = ref(null)
     
     // Context menu
     const showContextMenu = ref(false)
@@ -375,6 +459,34 @@ export default {
       })
     })
 
+    const weekDaysWork = computed(() => {
+      // Show only Mon-Fri like in the reference screenshot.
+      return weekDays.value.filter((d) => {
+        const wd = parseISO(d.date).getDay() // 0=Sun..6=Sat
+        return wd >= 1 && wd <= 5
+      })
+    })
+
+    const monthDays = computed(() => {
+      const baseDate = parseISO(filters.value.date)
+      const startDate = startOfMonth(baseDate)
+      const endDate = endOfMonth(baseDate)
+
+      const days = []
+      let cur = startDate
+      while (cur <= endDate) {
+        // 0 = Sunday, 6 = Saturday
+        if (cur.getDay() !== 0 && cur.getDay() !== 6) {
+          days.push({
+            date: format(cur, 'yyyy-MM-dd'),
+            name: format(cur, 'EEEE', { locale: ru })
+          })
+        }
+        cur = addDays(cur, 1)
+      }
+      return days
+    })
+
     const filteredGroups = computed(() => {
       if (filters.value.groupId) {
         return groups.value.filter(group => group.group_id === parseInt(filters.value.groupId))
@@ -387,10 +499,22 @@ export default {
       return format(parseISO(dateStr), 'dd.MM')
     }
 
+    /** Нормализация времени слота (без сдвига TZ, только HH:MM) */
+    const formatSlotTime = (t) => {
+      if (t == null || t === '') return ''
+      const s = String(t)
+      if (/^\d{1,2}:\d{2}/.test(s)) return s.slice(0, 5)
+      return s
+    }
+
     const getLessonsForCell = (date, slotId) => {
-      return lessons.value.filter(lesson => 
-        lesson.date === date && lesson.slot_id === slotId
-      )
+      const key = `${date}|${slotId}`
+      return lessonsByDateSlot.value.get(key) || []
+    }
+
+    const getLessonsForCellWithGroup = (date, slotId, groupName) => {
+      const key = `${date}|${slotId}|${String(groupName ?? '').trim()}`
+      return lessonsByDateSlotGroup.value.get(key) || []
     }
 
     const getGroupLessonsForSlot = (groupId, slotId, date) => {
@@ -406,8 +530,8 @@ export default {
       const group = groups.value.find(g => g.group_id === groupId)
       if (!group) return []
       
-      return lessons.value.filter(lesson => 
-        lesson.group_name === group.name && 
+      return lessons.value.filter(lesson =>
+        lesson.group_name?.trim() === group.name?.trim() &&
         lesson.date === date
       )
     }
@@ -416,9 +540,22 @@ export default {
       loading.value = true
       
       try {
-        // Always load week data
-        const startDate = startOfWeek(parseISO(filters.value.date), { weekStartsOn: 1 })
-        const endDate = addDays(startDate, 6)
+        const baseDate = parseISO(filters.value.date)
+
+        // Load data by view type
+        let startDate
+        let endDate
+        if (filters.value.viewType === 'day') {
+          startDate = baseDate
+          endDate = baseDate
+        } else if (filters.value.viewType === 'month') {
+          startDate = startOfMonth(baseDate)
+          endDate = endOfMonth(baseDate)
+        } else {
+          // week/groups/all-groups => keep existing "calendar week" behavior
+          startDate = startOfWeek(baseDate, { weekStartsOn: 1 })
+          endDate = addDays(startDate, 6)
+        }
         
         const params = {
           start_date: format(startDate, 'yyyy-MM-dd'),
@@ -436,7 +573,6 @@ export default {
         const lessonsResponse = await lessonsAPI.getByTerm(params)
         
         lessons.value = lessonsResponse.data || []
-        console.log('Loaded lessons:', lessons.value.length, 'for week', format(startDate, 'yyyy-MM-dd'), 'to', format(endDate, 'yyyy-MM-dd'))
       } catch (error) {
         console.error('Error loading lessons:', error)
         lessons.value = []
@@ -444,6 +580,35 @@ export default {
         loading.value = false
       }
     }
+
+    // Index lessons by `date|slot_id` to avoid O(N) filtering on every cell render.
+    const lessonsByDateSlot = computed(() => {
+      const map = new Map()
+      for (const lesson of lessons.value) {
+        const key = `${lesson.date}|${lesson.slot_id}`
+        const cur = map.get(key)
+        if (cur) {
+          cur.push(lesson)
+        } else {
+          map.set(key, [lesson])
+        }
+      }
+      return map
+    })
+
+    const lessonsByDateSlotGroup = computed(() => {
+      const map = new Map()
+      for (const lesson of lessons.value) {
+        const key = `${lesson.date}|${lesson.slot_id}|${String(lesson.group_name ?? '').trim()}`
+        const cur = map.get(key)
+        if (cur) {
+          cur.push(lesson)
+        } else {
+          map.set(key, [lesson])
+        }
+      }
+      return map
+    })
 
     const refreshData = async () => {
       await loadScheduleData()
@@ -453,7 +618,18 @@ export default {
       try {
         // Load time slots
         const slotsResponse = await catalogAPI.getTimeSlots()
-        timeSlots.value = slotsResponse.data || []
+        const raw = slotsResponse.data || []
+        const hourOf = (s) => {
+          const st = String(s.start_time || '0')
+          const m = st.match(/^(\d{1,2})/)
+          return m ? parseInt(m[1], 10) : 99
+        }
+        timeSlots.value = [...raw]
+          .filter((s) => {
+            const h = hourOf(s)
+            return h >= 6 && h <= 22
+          })
+          .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
         
         // Load groups
         const groupsResponse = await catalogAPI.getGroups()
@@ -490,21 +666,37 @@ export default {
       }
     }
 
-    const handleCellClick = (date, slotId) => {
+    const handleCellClick = (date, slotId, targetGroupId = null) => {
       if (authStore.canManageSchedule) {
         modalInitialDate.value = date
         modalInitialSlotId.value = slotId
+        modalInitialGroupId.value = targetGroupId
         showCreateLessonModal.value = true
       }
     }
 
-    const handleLessonDrop = async (lesson, targetDate, targetSlotId) => {
+    const handleLessonDrop = async (lesson, targetDate, targetSlotId, targetGroupName = null) => {
       if (!authStore.canManageSchedule) return
-      
+      const sid = Number(targetSlotId)
+      if (!Number.isFinite(sid) || sid < 1) {
+        console.warn('Invalid target slot for drag-drop')
+        return
+      }
+
+      // Prevent moving lesson into a different group column visually.
+      if (targetGroupName != null) {
+        const fromGroup = String(lesson.group_name ?? '').trim()
+        const toGroup = String(targetGroupName ?? '').trim()
+        if (fromGroup && toGroup && fromGroup !== toGroup) {
+          console.warn('Drop blocked: lesson belongs to another group')
+          return
+        }
+      }
+
       try {
         await lessonsAPI.update(lesson.lesson_id, {
           date: targetDate,
-          slot_id: targetSlotId,
+          slot_id: sid,
           version: lesson.version
         })
         
@@ -520,6 +712,7 @@ export default {
       editingLesson.value = null
       modalInitialDate.value = ''
       modalInitialSlotId.value = null
+      modalInitialGroupId.value = null
     }
 
     const handleLessonSaved = () => {
@@ -593,17 +786,22 @@ export default {
       teachers,
       filters,
       weekDays,
+      weekDaysWork,
+      monthDays,
       filteredGroups,
       showCreateLessonModal,
       editingLesson,
       modalInitialDate,
       modalInitialSlotId,
+      modalInitialGroupId,
       showContextMenu,
       contextMenuX,
       contextMenuY,
       contextMenuLesson,
       formatDate,
+      formatSlotTime,
       getLessonsForCell,
+      getLessonsForCellWithGroup,
       getGroupLessonsForSlot,
       getGroupLessonsForDay,
       loadScheduleData,
