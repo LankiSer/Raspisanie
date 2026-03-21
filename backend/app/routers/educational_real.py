@@ -51,11 +51,11 @@ async def get_groups(
     query = select(Group).where(Group.org_id == current_user.org_id)
     
     # Filter by active status if provided, otherwise show only active by default
-    if is_active is not None:
-        query = query.where(Group.is_active == is_active)
-    else:
-        # Default: show only active groups
-        query = query.where(Group.is_active == True)
+    # if is_active is not None:
+    #     query = query.where(Group.is_active == is_active)
+    # else:
+    #     # Default: show only active groups
+    #     query = query.where(Group.is_active == True)
     
     if search:
         query = query.where(Group.name.ilike(f"%{search}%"))
